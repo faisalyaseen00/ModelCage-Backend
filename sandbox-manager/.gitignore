@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+*.egg-info/
+*.sqlite
+/data/
+/quarantine/
+/uploads/
+/logs/
