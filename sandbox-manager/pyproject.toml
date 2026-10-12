@@ -7,12 +7,20 @@ name = "modelcage"
 version = "0.1.0"
 description = "Sandbox manager for model execution environments"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.13"
 authors = [{ name = "ModelCage" }]
 license = { text = "MIT" }
+dependencies = ["docker>=7.1,<8", "protobuf>=6.31.1,<7"]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"modelcage" = "app"}
+packages = ["modelcage", "modelcage.seccheck_proto"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.package-data]
+"modelcage.seccheck_proto" = ["*.proto", "*.md"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires a real Docker daemon, runsc and local runner image",
+    "network: requires permission to bind a localhost HTTP socket",
+]
