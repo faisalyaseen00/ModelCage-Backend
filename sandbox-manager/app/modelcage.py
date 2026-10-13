@@ -4,7 +4,7 @@ from pathlib import Path
 from dataclasses import replace
 import json
 
-from .categories import validate_category, CategoryAssignment
+from .categories import identify_category, CategoryAssignment, VALID_CATEGORY_STATUSES
 from .seccheck import SecCheckSession, InstrumentationUnavailable, CaptureFailure
 from .observations import observe
 from .raw_events import PolicyEventStore
@@ -57,7 +57,7 @@ class ModelCage:
         )
 
     def execute_model(self, model_path, category=None, *, analysis_id=None, manifest=None,
-                      collection_context=None, original_filename=None):
+                      collection_context=None, original_filename=None, expected_sha256=None):
         analysis_id = analysis_id or self.events.begin(category=category)
         if self.events.snapshot(analysis_id)["stage"] != "requested":
             raise ValueError("Analysis has already started")
@@ -75,6 +75,7 @@ class ModelCage:
         records = []
         summary = {}
         reason = None
+        identity_registered = False
         try:
             source = Path(model_path)
             if source.suffix.lower() not in {".pkl", ".pickle"}:
@@ -85,19 +86,32 @@ class ModelCage:
                  else "Hashing paused; quarantining a fresh upload copy",
                  hashing_status=hashing_status)
             try:
-                quarantined = self.quarantine.quarantine(source)
+                if expected_sha256 is None and isinstance(manifest, dict):
+                    expected_sha256 = manifest.get('sha256')
+                quarantined = self.quarantine.quarantine(source, expected_sha256=expected_sha256)
             except QuarantineError as error:
                 raise ModelInputError(str(error)) from error
-            assignment = validate_category(category, manifest)
-            emit("category_validated", "Category declarations checked", **assignment.to_dict(),
+            emit("identified", "Model bytes quarantined and SHA-256 identified" if quarantined.sha256 else "Model bytes quarantined without hashing",
+                 model_sha256=quarantined.sha256, size_bytes=quarantined.size_bytes,
+                 quarantine_reused=quarantined.reused,
+                 hashing_status="calculated" if quarantined.sha256 else "paused")
+            if quarantined.sha256 is not None:
+                self.store.identify(quarantined, analysis_id, original_filename or source.name, started)
+                identity_registered = True
+            # Inspect precisely the verified bytes that will be sent to the sandbox.
+            payload = quarantined.read_verified_bytes()
+            emit("identity_verified", "Quarantine bytes verified before sandbox execution",
+                 identity_verified=quarantined.sha256 is not None)
+            assignment = identify_category(payload, category, manifest)
+            emit("category_validated", assignment.metadata['category_reason'], **assignment.to_dict(),
                  model_sha256=quarantined.sha256,
                  hashing_status="calculated" if quarantined.sha256 is not None else "paused")
-            if assignment.validation_status in {"unclassified", "conflict"}:
+            if assignment.validation_status not in VALID_CATEGORY_STATUSES:
                 status = "pending_review"
-                reason = "Select a category" if assignment.task_category is None else "Category conflicts with manifest; review required"
+                reason = assignment.metadata['category_reason']
                 emit("category_review", reason, level="WARNING")
             else:
-                model_metadata = ModelMetadata(quarantined.sha256, quarantined.original_name,
+                model_metadata = ModelMetadata(quarantined.sha256, original_filename or quarantined.original_name,
                                                source.suffix.lower(), require_category(assignment.task_category))
                 root = f"modelcage/{analysis_id}"
                 command = ["python3", f"/tmp/{root}/model_runner.py", f"/tmp/{root}/model.pkl"]
@@ -109,7 +123,7 @@ class ModelCage:
                 self.manager.start(container)
                 emit("sandbox_started", "Disposable sandbox started")
                 self.manager.runtime.stage_files(container,
-                    {f"{root}/model.pkl": quarantined.path.read_bytes(), f"{root}/model_runner.py": RUNNER_SOURCE.encode()})
+                    {f"{root}/model.pkl": payload, f"{root}/model_runner.py": RUNNER_SOURCE.encode()})
                 emit("staged", "Setup finished; starting SecCheck outside the workload")
                 session = self.capture_factory(analysis_id, container, command)
                 session.start()
@@ -133,7 +147,7 @@ class ModelCage:
                 reason = str(error)
             else:
                 status = "timed_out" if isinstance(error, SandboxExecutionTimeout) else "failed"
-                reason = str(error) if isinstance(error, CaptureFailure) else type(error).__name__
+                reason = str(error) if isinstance(error, (CaptureFailure, ModelInputError, QuarantineError)) else type(error).__name__
             emit("operation_failed", reason, level="ERROR", capture_status=capture_status, failure_reason=reason)
             if container is not None:
                 try:
@@ -194,6 +208,11 @@ class ModelCage:
                     collection=collection_context or {},
                     runtime_verified=container is not None, seccheck_verified=bool(summary.get("workload_root")),
                     model_sha256=quarantined.sha256 if quarantined else None,
+                    hash_algorithm="sha256" if quarantined and quarantined.sha256 else None,
+                    size_bytes=quarantined.size_bytes if quarantined else None,
+                    quarantined_file=str(quarantined.path) if quarantined else None,
+                    quarantine_reused=quarantined.reused if quarantined else False,
+                    identity_verified=self.events.snapshot(analysis_id).get('identity_verified', False),
                     hashing_status="calculated" if quarantined and quarantined.sha256 is not None else "paused" if not self.quarantine.hashing_enabled else "not_calculated",
                     start_time=started, end_time=utc_timestamp(), status=status, capture_status=capture_status,
                     exit_code=result.exit_code if result is not None else None,
@@ -220,6 +239,15 @@ class ModelCage:
                 failure = failure or error
                 status = "failed"
                 emit("storage_failed", "Artifact publication failed", level="ERROR", storage_status="failed")
+            if identity_registered:
+                try:
+                    self.store.finish_identification(analysis_id, assignment=assignment,
+                        details={**assignment.metadata, **(collection_context or {})}, status=status,
+                        capture_status=capture_status, completed_at=utc_timestamp())
+                except Exception as error:
+                    failure = failure or error
+                    status = "failed"
+                    emit("registry_failed", "Unable to save model registry outcome", level="ERROR", storage_status="failed")
             emit("finalized", f"Analysis finalized: {status}", status=status, capture_status=capture_status,
                  level="INFO" if status == "succeeded" else "WARNING")
         if failure:

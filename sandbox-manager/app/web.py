@@ -203,8 +203,9 @@ button{{padding:.6rem 1rem}}.error{{color:#a00}}dt{{font-weight:bold;float:left;
 <p>Files are quarantined then executed only in a disposable runsc/gVisor sandbox.</p>
 <form method="post" action="/execute" enctype="multipart/form-data">
 <label>Pickle model (.pkl or .pickle) <input type="file" name="model" accept=".pkl,.pickle" required></label>
-<label>Model category <select name="category" required><option value="" selected disabled>Choose category</option><option value="text_generation">Text Generation</option><option value="text_classification">Text Classification</option><option value="image_classification">Image Classification</option></select></label>
-<label>Optional task manifest (JSON)<textarea name="manifest" maxlength="16384" placeholder='{{"task_category":"text_generation"}}'></textarea></label>
+<p>The model category is identified automatically. Syscall counts and frequencies go to the matching text generation, text classification, or image classification dataset.</p>
+<p>Models with insufficient or conflicting task information are held for review without being assigned to a dataset.</p>
+<label>Model config or metadata (optional JSON)<textarea name="manifest" maxlength="16384" placeholder='{{"architectures":["BertForSequenceClassification"]}}'></textarea></label>
 <label>Model family (optional, e.g. GPT or T5)<input name="family" maxlength="200" placeholder="Unknown if not supplied"></label>
 <button type="submit">Run in sandbox</button></form>{message}
 <section id="live" hidden><h2>Live analysis</h2><p id="connection"></p><pre id="status"></pre>
@@ -242,11 +243,14 @@ if (analysis && /^[0-9a-f-]{36}$/.test(analysis)) {
       connection.textContent = 'Connected — progress comes from backend operations.';
       state.textContent = 'Analysis: ' + analysis + '\nCategory: ' + (value.task_category || value.category || 'unclassified') +
         '\nModel SHA-256: ' + (value.model_sha256 || (value.hashing_status === 'paused' ? 'paused' : 'pending')) +
+        '\nIdentity verified: ' + (value.identity_verified === true ? 'yes' : 'not yet verified') +
+        '\nQuarantine copy: ' + (value.quarantine_reused === true ? 'reused after verification' : 'new') +
         '\nSandbox: ' + (value.sandbox_id || 'pending') +
         '\nRuntime: ' + (value.runtime || 'not yet verified') +
         '\nStage: ' + value.stage + '\nStatus: ' + value.status +
         '\nCategory source: ' + (value.category_source || 'pending') +
         '\nCategory validation: ' + (value.validation_status || 'pending') +
+        '\nCategory evidence: ' + (value.metadata?.category_reason || 'Inspecting model metadata') +
         '\nCapture: ' + value.capture_status + '\nEvents: ' + value.event_count +
         '\nRecord count: ' + (value.record_count ?? 0) +
         '\nReported losses: ' + (value.reported_losses ?? 'unavailable') +

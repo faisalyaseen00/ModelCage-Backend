@@ -90,7 +90,6 @@ EXECUTION_TIMEOUT_SECONDS = 30
 # runner command used for model deserialization.
 MODELCAGE_RUNNER_IMAGE = "modelcage-runner:phase6a"
 
-# Temporary development pause, requested while debugging execution. Re-enable
-# this flag to restore SHA-256 calculation and content-addressed quarantine reuse.
-# Quarantine copying and sandbox isolation remain enabled.
-MODEL_HASHING_ENABLED = False
+# Identify uploaded bytes before execution. Legacy unhashed records are retained;
+# they are never assigned a digest retroactively without their original bytes.
+MODEL_HASHING_ENABLED = True

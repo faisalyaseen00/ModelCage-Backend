@@ -2,8 +2,10 @@
 
 ## Automatic upload workflow
 
-1. Upload a `.pkl`/`.pickle` and select one of the three supported categories.
-2. The backend quarantines the file and runs the loading/deserialization harness
+1. Upload a `.pkl`/`.pickle`. The backend automatically identifies its task from
+   model architecture/config metadata; no category selection is required.
+2. The backend calculates SHA-256 while quarantining the file, verifies its bytes,
+   records its identity and category evidence, and runs the loading/deserialization harness
    in a disposable Docker/runsc sandbox, with the existing isolation limits.
 3. SecCheck captures syscalls. Immutable raw entry/exit records are saved first.
 4. After capture and cleanup, the backend counts syscall **entries**, separately
@@ -70,15 +72,17 @@ status remain in metadata. Failed loading runs are measurements only and remain
 excluded from `data/training/`. Partial captures can be inspected in the per-run
 file but do not enter the complete-capture category datasets.
 
-`metadata.csv` joins by `analysis_id` and includes original filename, hash (blank
-while paused), category, category provenance, format, profile, runtime, timestamps,
+`metadata.csv` joins by `analysis_id` and includes original filename, SHA-256, byte size, identity verification, quarantine reuse, category, category provenance, format, profile, runtime, timestamps,
 status, raw trace path and feature/training inclusion fields. Family/architecture/
-provider are recorded when supplied, not inferred from filenames.
+provider are recorded when available. Category evidence and its resolution reason
+are saved separately; filenames are never used to infer the category.
 
-The manual hashing pause remains enabled. Complete captures still enter the
-category **measurement** CSVs with `feature_row_included=True`; metadata truthfully
-records their operator-declared category and missing hash. No deduplication is
-claimed when hashing is paused.
+SHA-256 is enabled for uploads and batch collection. The hash identifies exact file
+bytes regardless of filename. Manual rescans still produce a fresh execution;
+batch collection uses the hash registry to skip previously processed artifacts.
+Historical unhashed measurements remain explicitly unhashed and training-ineligible.
+Hashing does not certify a benign model. Automatic category identification also
+does not establish benignness or automatically approve a training sample.
 
 Timed-out, empty, lossy, mismatched or incomplete captures do not enter
 those measurement CSVs. Their raw events and metadata remain available for review.
@@ -130,6 +134,14 @@ For a reviewed batch of **local** files, create a JSON array such as:
 ]
 ```
 
+The `category` and `category_evidence.task` fields can be omitted when the artifact
+or its architecture/config metadata identifies the category automatically. A
+`metadata` object may contain the original model config. Reviewed provenance
+(`category_evidence.reference` and `reviewed_by`), benign review, model ID, family,
+architecture and source are still required for this reviewed corpus workflow.
+Conflicting automatic and supplied task evidence rejects the candidate before
+execution. Ordinary uploads need none of these batch-review fields.
+
 Replace placeholders with real metadata. Paths are relative to the manifest.
 The controller does not download models. It copies and hashes bytes without
 loading them on the host, records exact duplicates in a SQLite registry, applies
@@ -140,8 +152,8 @@ sudo .venv/bin/python -m modelcage.collection reviewed-models.json \
   --workspace collection-loading --family-limit 20
 ```
 
-This optional mode explicitly enables hashing only in its dedicated workspace;
-it does not change the manual UI policy. Successful hashes are skipped on rerun.
+This mode requires SHA-256 and verifies that the bytes reaching quarantine match
+the controller digest. Successful hashes are skipped on rerun.
 Failed/interrupted records require `--retry-failed`. A single worker deliberately
 matches the host's current resource budget. `quality.json` reports category balance,
 family/architecture counts, exclusion reasons and identical feature vectors.
@@ -156,7 +168,7 @@ changes are made by this implementation.
 
 Unit tests cover counts, normalization, empty category headers, stable rebuilding,
 metadata separation, retries, deduplication, quotas, category conflicts, failed-run
-exclusion and manual uploads with hashing paused. The HTTP test verifies a real
+exclusion, verified upload identities, and legacy unhashed records. The HTTP test verifies a real
 multipart upload saves backend CSVs without an export request; its sandbox capture
 is mocked. The user already verified the minimal real SecCheck test under sudo.
 The optional real collection smoke test is:

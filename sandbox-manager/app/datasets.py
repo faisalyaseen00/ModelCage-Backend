@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 
 from .instrumentation import ModelCategory
+from .categories import VALID_CATEGORY_STATUSES
 from .syscall_names import NAMES
 
 CATEGORIES = tuple(c.value for c in ModelCategory)
@@ -30,8 +31,9 @@ def model_columns(metadata):
             'analysis_id': metadata['analysis_id']}
 
 META_FIELDS = ['analysis_id', 'model_id', 'filename', 'model_sha256', 'task_category',
+    'hash_algorithm', 'hashing_status', 'size_bytes', 'quarantined_file', 'quarantine_reused', 'identity_verified',
     'family', 'architecture', 'provider', 'library', 'source', 'revision',
-    'category_source', 'validation_status', 'category_evidence', 'benign_review',
+    'category_source', 'validation_status', 'category_evidence', 'category_reason', 'benign_review',
     'execution_profile', 'runner_image', 'runtime_version', 'status', 'capture_status', 'exit_code', 'failure_reason',
     'artifact_format', 'start_time', 'end_time', 'reported_losses', 'event_count', 'raw_events',
     'feature_row_included', 'dataset_eligible', 'exclusion_reasons']
@@ -99,7 +101,7 @@ TRAINING_ONLY_REASONS = {'hashing_paused_or_missing', 'category_not_validated', 
 
 def measurement_eligible(metadata, reasons):
     """A complete measurement is not automatically an approved training sample."""
-    return (metadata.get('validation_status') in {'user_declared', 'manifest_consistent'}
+    return (metadata.get('validation_status') in VALID_CATEGORY_STATUSES
             and not (set(reasons) - TRAINING_ONLY_REASONS))
 
 
@@ -145,12 +147,13 @@ class DatasetBuilder:
         # Stable exact dedup across categories, with conflicting category hashes excluded.
         categories = {}
         for m, _, _ in result:
-            if m.get('model_sha256'):
+            if (m.get('model_sha256') and m.get('task_category') in CATEGORIES
+                    and m.get('validation_status') in VALID_CATEGORY_STATUSES):
                 categories.setdefault(m['model_sha256'], set()).add(m.get('task_category'))
         seen = set()
         for m, counts, reasons in result:
             digest = m.get('model_sha256')
-            if digest and len(categories[digest]) > 1:
+            if digest and len(categories.get(digest, set())) > 1:
                 reasons.append('duplicate_category_conflict')
             if not reasons:
                 if digest in seen:
@@ -182,10 +185,11 @@ class DatasetBuilder:
             outputs[f'{category}.normalized.csv'] = csv_text(DATASET_FIELDS, normalized)
             quality['categories'][category] = len(category_rows)
         for m, counts, reasons in rows:
-            details = m.get('collection', {})
+            details = {**m.get('metadata', {}), **m.get('collection', {})}
             metadata.append({**{k: m.get(k, '') for k in META_FIELDS},
                 **{k: details.get(k, '') for k in ['model_id', 'family', 'architecture', 'provider', 'library', 'source', 'revision', 'benign_review']},
                 'category_evidence': json.dumps(details.get('category_evidence', {}), sort_keys=True),
+                'category_reason': m.get('metadata', {}).get('category_reason', ''),
                 'raw_events': m.get('artifacts', {}).get('raw_events', ''),
                 'feature_row_included': measurement_eligible(m, reasons),
                 'dataset_eligible': not reasons, 'exclusion_reasons': ';'.join(reasons)})

@@ -48,6 +48,27 @@ class TraceStore:
                     return_value TEXT,
                     PRIMARY KEY (execution_id, sequence)
                 );
+                CREATE TABLE IF NOT EXISTS model_artifacts (
+                    sha256 TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL,
+                    quarantined_file TEXT NOT NULL,
+                    first_seen TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS model_submissions (
+                    analysis_id TEXT PRIMARY KEY,
+                    sha256 TEXT NOT NULL REFERENCES model_artifacts(sha256),
+                    filename TEXT NOT NULL,
+                    model_id TEXT,
+                    category TEXT,
+                    family TEXT,
+                    architecture TEXT,
+                    source TEXT,
+                    status TEXT NOT NULL,
+                    capture_status TEXT,
+                    submitted_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS model_submissions_sha256 ON model_submissions(sha256);
                 """
             )
             existing_columns = {
@@ -69,6 +90,34 @@ class TraceStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    def identify(self, model, analysis_id, filename, submitted_at):
+        """Persist content identity separately from names, categories and executions."""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO model_artifacts VALUES (?,?,?,?)",
+                (model.sha256, model.size_bytes, str(model.path), submitted_at),
+            )
+            existing = connection.execute(
+                "SELECT size_bytes FROM model_artifacts WHERE sha256=?", (model.sha256,)
+            ).fetchone()
+            if existing['size_bytes'] != model.size_bytes:
+                raise ValueError("SHA-256 registry size mismatch")
+            connection.execute(
+                """INSERT INTO model_submissions
+                   (analysis_id,sha256,filename,status,submitted_at) VALUES (?,?,?,?,?)""",
+                (analysis_id, model.sha256, filename, 'quarantined', submitted_at),
+            )
+
+    def finish_identification(self, analysis_id, *, assignment, details, status, capture_status, completed_at):
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE model_submissions SET model_id=?,category=?,family=?,architecture=?,source=?,
+                   status=?,capture_status=?,completed_at=? WHERE analysis_id=?""",
+                (details.get('model_id'), assignment.task_category, details.get('family'),
+                 details.get('architecture'), details.get('source', 'manual_upload'), status,
+                 capture_status, completed_at, analysis_id),
+            )
 
     def save(self, trace: ExecutionTrace, *, model: "ModelMetadata | None" = None) -> None:
         with self._connect() as connection:

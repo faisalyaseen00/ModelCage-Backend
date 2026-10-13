@@ -12,12 +12,28 @@ collection, category datasets and the loading/deserialization scope.
 
 ## Current deployment status
 
-Model hashing is temporarily paused with `MODEL_HASHING_ENABLED = False` in
-`app/policy.py`. Each upload still gets a private quarantine copy, under a fresh
-`unhashed-<uuid>` name, without reusing older hash-named files. SHA-256 metadata is
-`null` and the UI reports `paused`. Existing files and hashing code are retained.
-Set the flag to `True` and restart the backend to restore hashing and reuse.
-Restart the backend after changing this flag in either direction.
+SHA-256 identification is enabled for normal uploads and reviewed batch collection.
+The backend streams the submitted bytes into private quarantine while calculating
+SHA-256; it never deserializes a model on the host. Identical `.pkl`/`.pickle` bytes
+share `quarantine/<sha256>.pkl`, independent of filename. New copies are read-only,
+publication never overwrites an existing copy, and reused copies are verified.
+The exact bytes staged into a fresh sandbox are checked again against the digest
+and size before container creation. A mismatch stops execution.
+
+An optional upload manifest `sha256` field (64 hexadecimal characters) supplies
+an expected digest. A mismatch rejects the submission. The digest, byte size,
+verification state and quarantine reuse appear in progress and execution metadata;
+`data/metadata.csv` also records them. SQLite `model_artifacts` stores one identity
+per digest, and `model_submissions` preserves each filename, declared model/category,
+family, available architecture/source, analysis ID and final processing status.
+Manual rescans retain independent executions and fresh sandboxes; the batch
+collector skips processed hashes and supports explicit failed-run retries.
+SHA-256 proves byte identity, not model safety or category correctness.
+
+Restart the backend to activate the code. Existing unhashed analyses and quarantine
+files remain untouched; resubmit their original bytes to create a verified identity.
+No digest is invented for historical records. The explicit hashing-disable option
+is retained for legacy compatibility tests; the default policy is enabled.
 
 The installed `runsc release-20260907.0` on x86-64 advertises 992 syscall
 tracepoints: 884 raw entry/exit points and 108 schematized points. ModelCage selects
@@ -47,7 +63,7 @@ for the relevant sandbox. Its privilege policy needs administrator review.
 Use Python 3.11 or 3.12; the existing `cgi` upload parser is unavailable in 3.13.
 
 ```bash
-cd /home/faisal/ModelCage/ModelCage-Backend/sandbox-manager
+cd /home/faisal/Documents/GitHub/ModelCage-Backend/sandbox-manager
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -e .
 # Only if the existing runner image has not been built:
@@ -55,23 +71,51 @@ docker build -t modelcage-runner:phase6a -f images/model-runner.Dockerfile .
 .venv/bin/python -m modelcage.web
 ```
 
-Open <http://127.0.0.1:8080>. Upload a `.pkl`/`.pickle`, explicitly select its task
-category, and optionally provide a JSON task manifest:
+Open <http://127.0.0.1:8080> and upload a `.pkl`/`.pickle`. **Category selection
+is automatic**; the form has no category selector. Before execution, the backend
+examines the SHA-256-verified bytes using bounded, symbolic pickle inspection.
+It never calls `pickle.load`/`loads`, imports referenced model modules, executes
+reducers, or constructs model objects on the host.
+
+Supported evidence includes:
+
+- Recognized Transformers task heads (for example `GPT2LMHeadModel`,
+  `BertForSequenceClassification`, and `ViTForImageClassification`).
+- Recognized torchvision classification architectures.
+- Scikit-learn Pipelines with a text vectorizer and a recognized final classifier.
+- Embedded root/model/config metadata, or optional model-config/model-card JSON
+  with `architectures`, `pipeline_tag`, task tags or task declarations.
+
+A model config can be supplied directly in the optional metadata box, without
+selecting a category, for example:
 
 ```json
-{"task_category":"text_generation","task_tags":["text_generation"]}
+{"architectures":["BertForSequenceClassification"],"model_type":"bert"}
 ```
 
-A manifest is an operator declaration, not proof of model behavior. No untrusted
-pickle is loaded on the host to discover its category. Filename/extension/model
-name are never used as task evidence. A missing category is `unclassified`; a
-conflicting manifest is `conflict`. Both stop before sandbox creation and produce
-`pending_review`, outside the three datasets. Correct the selection/manifest and
-submit a new analysis. Only these categories exist:
+Evidence is reconciled: conflicting architectures/tasks produce `conflict`, an
+unsupported task produces `unsupported`, and insufficient evidence produces
+`unclassified`. These cases finish as `pending_review` before sandbox creation
+and receive metadata but no category dataset row. The reason is shown in the UI.
+The backend never guesses a task from the filename, generic BERT/GPT family name,
+class labels, or a bare numerical classifier. A custom `GPTLanguageModel` class
+without recognizable task/config metadata remains unresolved; provide its actual
+config or task metadata. Loading dependencies/custom class definitions are still
+required inside the sandbox even after the category has been identified.
 
-- `text_generation`
-- `text_classification`
-- `image_classification`
+The category routes raw traces, 1/2/3-gram JSON, syscall count CSVs and normalized
+frequency CSVs to `text_generation`, `text_classification`, or
+`image_classification`. `auto_identified` means evidence came from the artifact;
+`metadata_identified` means it came from supplied metadata. Reasons, evidence and
+detector version are retained with each analysis. Architecture/task metadata is
+untrusted: identification does not prove model behavior or benignness, and it does
+not automatically admit an upload to the reviewed training corpus.
+
+Inspection is bounded to 64 MiB and 200,000 pickle operations. Unsupported or
+opaque reconstruction, inspection limits and missing metadata may require review.
+No downloads, model-hub lookup, `.pt` support or inference were added. Explicit
+categories remain compatible for existing API/reviewed batch clients, but cannot
+override conflicting extracted evidence. See [automatic category identification](docs/category-identification.md).
 
 The UI redirects promptly to `/?analysis=<uuid>` and polls
 `GET /analyses/<uuid>` once per second. It shows actual backend events, entry count,
@@ -201,7 +245,9 @@ cage = ModelCage(observation_policy=ObservationPolicy(enabled_groups=("network",
 ```
 
 Deterministic features use **only syscall entries**. 1-gram presence/frequency is
-the baseline; 2/3/4-grams are experimental. Both global receive-order and per-thread
+the baseline; 2- and 3-grams are experimental. These are the only three supported
+orders in new feature outputs (feature schema v2). Historical schema-v1 artifacts
+may contain 4-grams and remain unchanged. Both global receive-order and per-thread
 views are saved beside the category dataset. Incomplete-trace outputs carry their
 capture status and are not evidence of complete behavior. Reproduce them offline:
 

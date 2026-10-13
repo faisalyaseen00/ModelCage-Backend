@@ -1,4 +1,5 @@
 import csv
+import hashlib
 from io import StringIO
 import json
 import pickle
@@ -9,6 +10,7 @@ import pytest
 from app.collection import Collector, validate_candidate
 from app.datasets import DatasetBuilder, CATEGORIES, SYSCALLS, PROFILE, DATASET_FIELDS
 from app.modelcage import ModelCage
+from app.quarantine import QuarantineStore
 from tests.seccheck_fixtures import manager_fixture, ProtocolSession
 
 
@@ -52,6 +54,23 @@ def test_collection_exports_fixed_counts_normalization_and_metadata(tmp_path):
     result, _ = collector.run(manifest)
     assert result[0]['status'] == 'duplicate'
     runtime.exec_monitored.assert_called_once()
+
+
+def test_collection_dedup_uses_bytes_across_names_and_same_name_revisions(tmp_path):
+    collector, runtime = setup_collector(tmp_path)
+    source = tmp_path / 'model.pkl'; source.write_bytes(pickle.dumps(1))
+    renamed = tmp_path / 'renamed.pickle'; renamed.write_bytes(source.read_bytes())
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps([candidate(source, sha256=expected.upper()), candidate(renamed)]))
+    results, _ = collector.run(manifest)
+    assert [r['status'] for r in results] == ['succeeded', 'duplicate']
+    assert {r['sha256'] for r in results} == {expected}
+    source.write_bytes(pickle.dumps(2))
+    manifest.write_text(json.dumps([candidate(source)]))
+    results, _ = collector.run(manifest)
+    assert results[0]['status'] == 'succeeded' and results[0]['sha256'] != expected
+    assert runtime.exec_monitored.call_count == 2
 
 
 def test_reject_unreviewed_and_continue_then_apply_quota(tmp_path):
@@ -133,6 +152,7 @@ def test_empty_dataset_has_all_three_headers(tmp_path):
 def test_manual_upload_with_hashing_paused_still_exports_features(tmp_path):
     manager, runtime = manager_fixture()
     cage = ModelCage(str(tmp_path / 'manual.sqlite'), manager=manager, capture_factory=ProtocolSession)
+    cage.quarantine = QuarantineStore(tmp_path / 'quarantine', hashing_enabled=False)
     source = tmp_path / 'uploaded.pkl'; source.write_bytes(pickle.dumps(1))
     result = cage.execute_model(source, 'text_classification', original_filename='user-model.pkl')
     builder = DatasetBuilder(cage.policy_store.root)
@@ -151,9 +171,11 @@ def test_manual_upload_with_hashing_paused_still_exports_features(tmp_path):
 def test_backend_auto_routes_all_categories_and_retains_prior_rows(tmp_path):
     manager, runtime = manager_fixture()
     cage = ModelCage(str(tmp_path / 'manual.sqlite'), manager=manager, capture_factory=ProtocolSession)
-    source = tmp_path / 'upload.pkl'; source.write_bytes(pickle.dumps(1))
+    source = tmp_path / 'upload.pkl'
     for category in CATEGORIES:
+        source.write_bytes(pickle.dumps(category))
         cage.execute_model(source, category)
+    source.write_bytes(pickle.dumps('another text generation model'))
     cage.execute_model(source, 'text_generation')
     root = cage.policy_store.root
     for category in CATEGORIES:
@@ -193,6 +215,7 @@ def test_unreadable_metadata_does_not_overwrite_existing_csv(tmp_path, monkeypat
 def test_datasets_contains_real_measurement_frequencies_while_hashing_paused(tmp_path):
     manager, runtime = manager_fixture()
     cage = ModelCage(str(tmp_path / 'manual.sqlite'), manager=manager, capture_factory=ProtocolSession)
+    cage.quarantine = QuarantineStore(tmp_path / 'quarantine', hashing_enabled=False)
     source = tmp_path / 'model.pkl'; source.write_bytes(pickle.dumps(1))
     cage.execute_model(source, 'text_generation')
     root = cage.policy_store.root

@@ -17,13 +17,15 @@ Implementation:
   sandbox after staging, and identify the direct harness exec using its exact argv.
   Track descendants from process lifecycle context; never persist those lifecycle
   records in syscall JSONL. No host tracing and no in-sandbox strace fallback.
-- Add explicit category/manifest validation without host deserialization; conflicts
-  and missing assignments stop before sandbox execution.
+- Identify categories automatically from symbolic artifact inspection and model
+  metadata without host deserialization; conflicts, unsupported tasks and missing
+  evidence stop before sandbox execution. Preserve explicit legacy declarations
+  for reviewed clients without letting them override contradictory evidence.
 - Preserve schema-identical ordered entry/exit records in category directories;
   metadata, observations, features and progress stay separate. Publish immutable
   artifacts, record losses/invalid records/partial capture and preserve old data.
 - Add configurable evidence-based observation rules and reproducible offline
-  1/2/3/4-grams using only entries, with separate per-thread experiments.
+  1/2/3-grams using only entries, with separate per-thread experiments.
 - Integrate facade, runtime adapter, existing progress page and tests. Keep low-level
   Phase 1 sandbox APIs compatible; update model-level tests for the new strict policy.
 

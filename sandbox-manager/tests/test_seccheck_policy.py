@@ -141,9 +141,14 @@ def test_missing_and_conflicting_category_never_guessed(tmp_path):
 
 def test_all_ngram_orders_and_thread_separation(decoder):
     for _ in range(5): call(decoder,7,syscall.Open,257)
-    global_features=ngrams(decoder.events)['streams']['collector_order']
-    assert [global_features[str(n)][0]['frequency'] for n in range(1,5)] == [5,4,3,2]
-    assert len(ngrams(decoder.events,per_thread=True)['streams']) == 1
+    for per_thread in (False, True):
+        result = ngrams(decoder.events, per_thread=per_thread)
+        assert result['schema_version'] == 2
+        assert result['experimental'] == [2, 3]
+        assert len(result['streams']) == 1
+        features = next(iter(result['streams'].values()))
+        assert set(features) == {'1', '2', '3'}
+        assert [features[str(n)][0]['frequency'] for n in (1, 2, 3)] == [5, 4, 3]
     with pytest.raises(ValueError): ngrams(list(reversed(decoder.events)))
 
 

@@ -109,9 +109,10 @@ class PolicyEventStore:
         from uuid import UUID
         from .features import ngrams
         from .instrumentation import require_category
+        from .categories import VALID_CATEGORY_STATUSES
         if str(UUID(analysis_id)) != analysis_id:
             raise ValueError('Invalid analysis ID')
-        valid = assignment.validation_status in {'user_declared', 'manifest_consistent'}
+        valid = assignment.validation_status in VALID_CATEGORY_STATUSES
         category = require_category(assignment.task_category).value if valid else None
         if events and not valid:
             raise ValueError('Unclassified events cannot enter category datasets')

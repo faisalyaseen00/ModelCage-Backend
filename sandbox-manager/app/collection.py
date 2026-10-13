@@ -11,14 +11,15 @@ from uuid import uuid4
 
 from .datasets import CATEGORIES, DatasetBuilder, PROFILE
 from .modelcage import ModelCage
-from .quarantine import QuarantineStore
+from .quarantine import QuarantineStore, normalize_sha256, open_regular
+from .categories import identify_category, VALID_CATEGORY_STATUSES
 
 MAX_BYTES = 64 * 1024 * 1024
 def validate_candidate(candidate):
     if not isinstance(candidate, dict):
         raise ValueError('Each candidate must be a JSON object')
     category = candidate.get('category')
-    if category not in CATEGORIES:
+    if category is not None and category not in CATEGORIES:
         raise ValueError('Unsupported category')
     for field in ('model_id', 'family', 'architecture', 'source', 'benign_review'):
         if not isinstance(candidate.get(field), str) or not candidate[field].strip():
@@ -26,7 +27,7 @@ def validate_candidate(candidate):
     if candidate.get('repo_id') or candidate.get('url'):
         raise ValueError('Collection accepts uploaded/local files only; downloads are disabled')
     evidence = candidate.get('category_evidence', {})
-    if (not isinstance(evidence, dict) or evidence.get('task') != category
+    if (not isinstance(evidence, dict) or (category is not None and evidence.get('task') != category)
             or not evidence.get('reference') or not evidence.get('reviewed_by')):
         raise ValueError('Local artifact requires reviewed task metadata and reference')
     filename = str(candidate.get('path', ''))
@@ -34,7 +35,7 @@ def validate_candidate(candidate):
         raise ValueError('Loading profile supports .pkl/.pickle only; no format conversion')
     return {**{k: candidate.get(k, '') for k in ('model_id', 'family', 'architecture', 'provider',
         'source', 'library', 'revision', 'benign_review')},
-        'category_validated': True, 'category_evidence': evidence}
+        'category_validated': False, 'category_evidence': evidence}
 
 
 def obtain(candidate, base, destination):
@@ -42,7 +43,7 @@ def obtain(candidate, base, destination):
     source = base / candidate['path']
     if source.is_symlink() or not source.is_file():
         raise ValueError('Local input must be a regular file, not a symlink')
-    stream = source.open('rb')
+    stream = open_regular(source)
     digest = hashlib.sha256()
     size = 0
     with stream, destination.open('xb') as target:
@@ -54,7 +55,7 @@ def obtain(candidate, base, destination):
             digest.update(chunk)
             target.write(chunk)
     value = digest.hexdigest()
-    if candidate.get('sha256') and candidate['sha256'] != value:
+    if candidate.get('sha256') is not None and normalize_sha256(candidate['sha256']) != value:
         raise ValueError('Artifact SHA-256 does not match manifest')
     return value
 
@@ -91,10 +92,23 @@ class Collector:
                 claimed = False
                 try:
                     details = validate_candidate(candidate)
-                    category = candidate['category']
                     with tempfile.TemporaryDirectory(dir=self.workspace, prefix='incoming-') as directory:
                         artifact = Path(directory) / 'model.pkl'
                         digest = obtain(candidate, manifest_path.parent, artifact)
+                        model_metadata = candidate.get('metadata', {})
+                        if not isinstance(model_metadata, dict):
+                            raise ValueError('Model metadata must be a JSON object')
+                        model_metadata = {**model_metadata, 'architecture': details['architecture'],
+                                          'model_id': details['model_id'], 'family': details['family']}
+                        reviewed_task = details['category_evidence'].get('task')
+                        if reviewed_task:
+                            model_metadata['task_category'] = reviewed_task
+                        assignment = identify_category(artifact.read_bytes(), candidate.get('category'), model_metadata)
+                        if assignment.validation_status not in VALID_CATEGORY_STATUSES:
+                            raise ValueError(assignment.metadata['category_reason'])
+                        category = assignment.task_category
+                        details['category_validated'] = True
+                        details['detected_category'] = category
                         with self.db() as db:
                             old = db.execute('SELECT category,status,analysis_id FROM models WHERE sha256=?', (digest,)).fetchone()
                             if old and old[0] != category:
@@ -113,11 +127,12 @@ class Collector:
                         if claimed:
                             if self.cage is None:
                                 self.cage = ModelCage(str(self.workspace / 'modelcage.sqlite'))
-                            # Collection requires exact dedup; UI development pause is unchanged.
+                            # Collection always requires exact byte identity for deduplication.
                             self.cage.quarantine = QuarantineStore(self.workspace / 'quarantine', hashing_enabled=True)
                             self.cage.events.begin(category=category, analysis_id=aid)
-                            self.cage.execute_model(artifact, category, analysis_id=aid,
-                                manifest={'task_category': category}, collection_context=details,
+                            self.cage.execute_model(artifact, candidate.get('category'), analysis_id=aid,
+                                manifest=model_metadata, collection_context=details,
+                                expected_sha256=digest,
                                 original_filename=Path(candidate.get('filename') or candidate.get('path')).name)
                             state = self.cage.events.snapshot(aid)
                             status = state['status']

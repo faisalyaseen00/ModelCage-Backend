@@ -1,8 +1,10 @@
-"""Reproducible offline entry-only baseline and experimental n-gram features."""
+"""Reproducible entry-only syscall unigram, bigram and trigram features."""
 import argparse
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
+
+NGRAM_ORDERS = (1, 2, 3)
 
 
 def ngrams(events, *, per_thread=False):
@@ -29,13 +31,13 @@ def ngrams(events, *, per_thread=False):
     output = {}
     for key, names in sorted(streams.items()):
         features = {}
-        for n in range(1, 5):
+        for n in NGRAM_ORDERS:
             counts = Counter(tuple(names[i:i+n]) for i in range(len(names)-n+1))
             features[str(n)] = [{"syscalls": list(words), "frequency": count, **({"present": True} if n == 1 else {})}
                                for words, count in sorted(counts.items())]
         output[key] = features
-    return {"schema_version": 1, "sequence_policy": "per_thread" if per_thread else "collector_receive_order",
-            "baseline": "1-gram presence/frequency", "experimental": [2, 3, 4], "streams": output}
+    return {"schema_version": 2, "sequence_policy": "per_thread" if per_thread else "collector_receive_order",
+            "baseline": "1-gram presence/frequency", "experimental": [2, 3], "streams": output}
 
 
 def main():

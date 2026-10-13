@@ -1,3 +1,50 @@
+# Automatic category identification
+
+Uploads no longer require a category selection. The backend inspects verified
+pickle bytes symbolically (no host deserialization/imports) and resolves known
+model heads, torchvision classifiers, sklearn text-classification pipelines and
+embedded or supplied task/config metadata. Consistent supported evidence routes
+raw traces, 1/2/3-gram features and count/normalized CSVs automatically. Unknown,
+unsupported or conflicting tasks produce review metadata without execution or a
+category row. Reviewed batch manifests can omit category when metadata resolves
+it. Explicit legacy categories cannot override contradictory artifact evidence.
+
+This supersedes the manual-category descriptions in historical reports below.
+See docs/category-identification.md for evidence, limitations and validation.
+
+Validation: **181 non-integration tests passed**, including HTTP uploads without
+category selection for all three destinations. Eleven Docker integration tests
+were deselected; the HTTP tests use synthetic capture.
+
+# Current syscall feature scope
+
+New global and per-thread features contain only 1-, 2- and 3-grams (feature schema
+v2). This supersedes the four-gram scope in the historical report below. Existing
+immutable feature artifacts are retained unchanged.
+
+# SHA-256 identification update
+
+SHA-256 is now enabled by default. Submission bytes are streamed into quarantine,
+identified independently of filename, published without overwriting existing
+artifacts, and verified before sandbox creation. Optional expected hashes reject
+mismatches. Metadata/CSV/progress retain the digest, size and verification state.
+SQLite tracks distinct artifacts and all submission outcomes, including failures
+and category-review cases. Batch collection retains exact-hash deduplication;
+manual rescans retain fresh sandbox executions. Historical unhashed records are
+preserved without assigning fabricated hashes. See README for current behavior.
+
+Validation: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests -q -m
+'not integration' -p no:cacheprovider` — **135 passed, 11 deselected**. This includes
+real local HTTP/socket tests with synthetic capture, known SHA-256 vectors,
+multi-chunk hashing, concurrent publication, renamed duplicates, changed-content
+revisions, expected-hash rejection, tamper detection and registry/CSV persistence.
+Live Docker/SecCheck integration was not rerun for this change.
+
+The reports below describe earlier implementation states; their hashing-pause
+statements no longer describe the default policy.
+
+---
+
 # Current Phase 2 upload workflow
 
 The user verified the minimal live SecCheck test under sudo (1 passed). The

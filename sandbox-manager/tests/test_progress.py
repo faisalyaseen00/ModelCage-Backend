@@ -1,5 +1,6 @@
 """Lifecycle/API unit tests; these never require Docker."""
 import json
+import hashlib
 import logging
 import pickle
 from concurrent.futures import ThreadPoolExecutor
@@ -40,12 +41,14 @@ def test_terminal_journal_and_reconnect_snapshot_match(setup_cage, caplog):
     assert snapshot["event_count"] == 1
     assert snapshot["cleanup_status"] == "destroyed"
     assert snapshot["storage_status"] == "saved"
-    assert snapshot["hashing_status"] == "paused"
-    assert snapshot["model_sha256"] is None
+    assert snapshot["hashing_status"] == "calculated"
+    assert snapshot["model_sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert snapshot["identity_verified"] is True
     assert [r.message.split("] ", 1)[1] for r in caplog.records] == [e["message"] for e in snapshot["events"]]
     reloaded = ExecutionEvents(cage.events.root)
     assert reloaded.snapshot(result.execution_id) == snapshot
     stages = [e["stage"] for e in snapshot["events"]]
+    assert stages.index("identified") < stages.index("identity_verified") < stages.index("creating")
     assert stages.index("runtime_verified") < stages.index("sandbox_started")
     assert stages.index("capture_stopped") < stages.index("destroyed") < stages.index("stored") < stages.index("finalized")
     runtime.remove_container.assert_called_once()
