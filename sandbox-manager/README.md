@@ -20,7 +20,7 @@ publication never overwrites an existing copy, and reused copies are verified.
 The exact bytes staged into a fresh sandbox are checked again against the digest
 and size before container creation. A mismatch stops execution.
 
-An optional upload manifest `sha256` field (64 hexadecimal characters) supplies
+An optional upload manifest `sha256`  field (64 hexadecimal characters) supplies
 an expected digest. A mismatch rejects the submission. The digest, byte size,
 verification state and quarantine reuse appear in progress and execution metadata;
 `data/metadata.csv` also records them. SQLite `model_artifacts` stores one identity
