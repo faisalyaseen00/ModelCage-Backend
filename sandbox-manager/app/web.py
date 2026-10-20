@@ -215,7 +215,7 @@ button{{border:0;border-radius:10px;background:linear-gradient(135deg,var(--acce
 <section class="hero"><div class="eyebrow">Policy-driven runtime instrumentation</div><h1>Inspect models in a <span>disposable sandbox.</span></h1><p>Upload a pickle model and ModelCage will quarantine, identify, and execute it behind gVisor isolation while collecting syscall evidence.</p></section>
 <div class="layout"><section class="card"><div class="eyebrow">New analysis</div><h2>Submit a model</h2><p class="subtle">Supported formats: .pkl and .pickle · Maximum size: 64 MiB</p>
 <form method="post" action="/execute" enctype="multipart/form-data">
-<label for="model">Pickle model</label><input id="model" type="file" name="model" accept=".pkl,.pickle" required>
+<label for="model">Pickle model</label><input id="model" type="file" name="model" accept=".pkl,.pickle" required><p id="file-hint" class="subtle file-hint">Choose a .pkl or .pickle file to begin.</p>
 <p class="subtle">Category identification is automatic. Models with insufficient or conflicting task information are held for review.</p>
 <label for="manifest">Model config or metadata <span class="subtle">(optional JSON)</span></label><textarea id="manifest" name="manifest" maxlength="16384" placeholder='{{"architectures":["BertForSequenceClassification"]}}'></textarea>
 <label for="family">Model family <span class="subtle">(optional)</span></label><input id="family" name="family" maxlength="200" placeholder="e.g. GPT, T5, ResNet">
@@ -237,6 +237,21 @@ button{{border:0;border-radius:10px;background:linear-gradient(135deg,var(--acce
 
 
 LIVE_SCRIPT = r"""<script>
+const modelInput = document.getElementById('model');
+const fileHint = document.getElementById('file-hint');
+if (modelInput && fileHint) {
+  modelInput.addEventListener('change', () => {
+    const file = modelInput.files[0];
+    if (!file) {
+      fileHint.textContent = 'Choose a .pkl or .pickle file to begin.';
+      return;
+    }
+    const size = file.size < 1024 * 1024
+      ? Math.max(1, Math.round(file.size / 1024)) + ' KB'
+      : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
+    fileHint.textContent = file.name + ' · ' + size + ' · ready to upload';
+  });
+}
 const analysis = new URLSearchParams(location.search).get('analysis');
 if (analysis && /^[0-9a-f-]{36}$/.test(analysis)) {
   document.getElementById('live').hidden = false;
