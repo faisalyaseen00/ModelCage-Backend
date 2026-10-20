@@ -195,26 +195,35 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
             </section>"""
 
         html = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>ModelCage POC</title>
-<style>body{{font:16px system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem}}
-form,.result{{border:1px solid #ddd;border-radius:8px;padding:1.25rem}}label{{display:block;margin:.75rem 0}}
-button{{padding:.6rem 1rem}}.error{{color:#a00}}dt{{font-weight:bold;float:left;clear:left;width:9rem}}dd{{margin-left:10rem}}</style>
-</head><body><h1>ModelCage sandbox POC</h1>
-<p>Files are quarantined then executed only in a disposable runsc/gVisor sandbox.</p>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ModelCage | Secure model analysis</title>
+<style>
+:root{{color-scheme:dark;--bg:#09111f;--panel:#111d31;--panel-soft:#17253c;--line:#2b3c59;--text:#edf4ff;--muted:#9fb0c9;--accent:#6ee7c7;--accent-strong:#37cfa9;--danger:#ff8c9e;--shadow:0 24px 70px rgba(0,0,0,.28)}}
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0,#17345a 0,transparent 38%),var(--bg);color:var(--text);font:15px/1.6 Inter,ui-sans-serif,system-ui,sans-serif}}
+.shell{{max-width:1000px;margin:0 auto;padding:48px 22px 72px}}.topbar{{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:52px}}
+.brand{{display:flex;align-items:center;gap:12px;font-weight:750;letter-spacing:.02em}}.mark{{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#6ca8ff);color:#07121e;font-weight:900}}
+.badge{{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px;padding:5px 11px}}.hero{{max-width:720px;margin-bottom:34px}}
+h1{{font-size:clamp(2.1rem,5vw,3.7rem);line-height:1.05;letter-spacing:-.055em;margin:0 0 18px}}h1 span{{color:var(--accent)}}.hero p{{color:var(--muted);font-size:1.08rem;margin:0}}
+.layout{{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);gap:20px}}.card{{background:rgba(17,29,49,.88);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:26px}}
+.card h2{{font-size:1.15rem;margin:0 0 5px}}.eyebrow{{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}}.subtle{{color:var(--muted);font-size:13px;margin:0 0 22px}}
+label{{display:block;color:#dbe6f8;font-weight:650;margin:18px 0 7px}}input,textarea{{display:block;width:100%;border:1px solid var(--line);border-radius:10px;background:#0b1628;color:var(--text);font:inherit;padding:11px 12px;outline:none}}input:focus,textarea:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(110,231,199,.12)}}textarea{{min-height:108px;resize:vertical}}input[type=file]{{padding:9px;color:var(--muted)}}::placeholder{{color:#647793}}
+button{{border:0;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-strong));color:#06151a;cursor:pointer;font:inherit;font-weight:800;margin-top:22px;padding:12px 18px;transition:transform .15s,filter .15s}}button:hover{{filter:brightness(1.08);transform:translateY(-1px)}}.error{{border:1px solid rgba(255,140,158,.4);border-radius:10px;background:rgba(255,140,158,.1);color:var(--danger);padding:12px 15px}}.result{{margin-top:20px;border:1px solid rgba(110,231,199,.35);border-radius:14px;background:rgba(110,231,199,.07);padding:20px}}.result h2{{margin-top:0}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:18px 0}}dt{{color:var(--muted)}}dd{{margin:0;overflow-wrap:anywhere}}code{{color:var(--accent);font:12px ui-monospace,SFMono-Regular,monospace}}a{{color:var(--accent);font-weight:700}}
+.side-list{{list-style:none;padding:0;margin:22px 0 0}}.side-list li{{border-top:1px solid var(--line);padding:13px 0;color:var(--muted)}}.side-list strong{{display:block;color:var(--text);font-size:14px}}.side-list strong::before{{content:"✓";color:var(--accent);margin-right:8px}}
+#live{{margin-top:20px}}#connection{{color:var(--accent);font-size:13px}}#status{{background:#091321;border:1px solid var(--line);border-radius:12px;color:#c9d8ed;overflow:auto;padding:18px;white-space:pre-wrap;word-break:break-word}}#events{{display:grid;gap:8px;list-style:none;margin:18px 0;padding:0}}#events li{{background:var(--panel-soft);border-left:3px solid var(--accent);border-radius:7px;padding:8px 12px;color:#c7d4e8;font-size:13px}}.paths{{color:var(--muted);font-size:13px;margin-top:22px}}@media(max-width:760px){{.shell{{padding-top:25px}}.topbar{{margin-bottom:35px}}.layout{{grid-template-columns:1fr}}.badge{{display:none}}}}
+</style></head><body><main class="shell">
+<header class="topbar"><div class="brand"><span class="mark">M</span> ModelCage</div><span class="badge">LOCAL ANALYSIS CONSOLE</span></header>
+<section class="hero"><div class="eyebrow">Policy-driven runtime instrumentation</div><h1>Inspect models in a <span>disposable sandbox.</span></h1><p>Upload a pickle model and ModelCage will quarantine, identify, and execute it behind gVisor isolation while collecting syscall evidence.</p></section>
+<div class="layout"><section class="card"><div class="eyebrow">New analysis</div><h2>Submit a model</h2><p class="subtle">Supported formats: .pkl and .pickle · Maximum size: 64 MiB</p>
 <form method="post" action="/execute" enctype="multipart/form-data">
-<label>Pickle model (.pkl or .pickle) <input type="file" name="model" accept=".pkl,.pickle" required></label>
-<p>The model category is identified automatically. Syscall counts and frequencies go to the matching text generation, text classification, or image classification dataset.</p>
-<p>Models with insufficient or conflicting task information are held for review without being assigned to a dataset.</p>
-<label>Model config or metadata (optional JSON)<textarea name="manifest" maxlength="16384" placeholder='{{"architectures":["BertForSequenceClassification"]}}'></textarea></label>
-<label>Model family (optional, e.g. GPT or T5)<input name="family" maxlength="200" placeholder="Unknown if not supplied"></label>
-<button type="submit">Run in sandbox</button></form>{message}
-<section id="live" hidden><h2>Live analysis</h2><p id="connection"></p><pre id="status"></pre>
-<ol id="events"></ol>
-<p>Raw traces and category syscall CSVs are saved automatically in the backend.</p>
-<p>Counts: <code>data/features/&lt;category&gt;.csv</code><br>
-Relative frequencies: <code>data/features/&lt;category&gt;.normalized.csv</code><br>
-Metadata: <code>data/metadata.csv</code></p></section>
-</body></html>"""
+<label for="model">Pickle model</label><input id="model" type="file" name="model" accept=".pkl,.pickle" required>
+<p class="subtle">Category identification is automatic. Models with insufficient or conflicting task information are held for review.</p>
+<label for="manifest">Model config or metadata <span class="subtle">(optional JSON)</span></label><textarea id="manifest" name="manifest" maxlength="16384" placeholder='{{"architectures":["BertForSequenceClassification"]}}'></textarea>
+<label for="family">Model family <span class="subtle">(optional)</span></label><input id="family" name="family" maxlength="200" placeholder="e.g. GPT, T5, ResNet">
+<button type="submit">Run securely <span aria-hidden="true">→</span></button></form>{message}</section>
+<aside class="card"><div class="eyebrow">What happens next</div><h2>Evidence, not assumptions</h2><p class="subtle">Every run follows the same guarded workflow.</p>
+<ul class="side-list"><li><strong>Quarantine</strong>Bytes are hashed and verified before staging.</li><li><strong>Identify</strong>Metadata is inspected without loading the model on the host.</li><li><strong>Observe</strong>Syscall traces and execution events are captured.</li><li><strong>Review</strong>Evidence is routed to the matching dataset or held safely.</li></ul></aside></div>
+<section id="live" class="card" hidden><div class="eyebrow">Live telemetry</div><h2>Analysis in progress</h2><p id="connection"></p><pre id="status"></pre><ol id="events"></ol><p class="paths">Raw traces and category syscall CSVs are saved automatically.<br>Counts: <code>data/features/&lt;category&gt;.csv</code> · Frequencies: <code>data/features/&lt;category&gt;.normalized.csv</code> · Metadata: <code>data/metadata.csv</code></p></section>
+</main></body></html>"""
         html = html.replace("</body>", LIVE_SCRIPT + "</body>")
         encoded = html.encode("utf-8")
         self.send_response(status)
