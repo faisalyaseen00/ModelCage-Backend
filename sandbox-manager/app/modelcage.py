@@ -254,6 +254,14 @@ class ModelCage:
             raise failure
         return replace(result, capture_status=capture_status) if result is not None else None
 
+    def health(self) -> dict[str, int | str]:
+        """Return a non-sensitive service status for local orchestration checks."""
+        return {
+            "service": "modelcage",
+            "status": "ok",
+            "active_analyses": self.events.active_count(),
+        }
+
     def get_trace(self, execution_id: str):
         try:
             return self.store.load(execution_id)

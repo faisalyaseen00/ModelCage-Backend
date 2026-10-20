@@ -12,6 +12,7 @@ from .telemetry import utc_timestamp
 
 
 logger = logging.getLogger("modelcage.lifecycle")
+_TERMINAL_STATUSES = {"succeeded", "failed", "timed_out", "pending_review"}
 
 
 class ExecutionEvents:
@@ -69,3 +70,14 @@ class ExecutionEvents:
                 snapshot.update(event)
             snapshot["events"] = events
             return deepcopy(snapshot)
+
+    def active_count(self) -> int:
+        """Return the number of analyses that have not reached a terminal state."""
+        with self._lock:
+            analysis_ids = set(self._cached)
+            analysis_ids.update(path.name.removesuffix(".progress.jsonl") for path in self.root.glob("*.progress.jsonl"))
+            return sum(
+                1
+                for analysis_id in analysis_ids
+                if self.snapshot(analysis_id).get("status") not in _TERMINAL_STATUSES
+            )
