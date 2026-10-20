@@ -36,6 +36,14 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
 
     server: ModelCageWebServer
 
+    def end_headers(self) -> None:
+        """Apply browser protections consistently to UI and API responses."""
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        super().end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path == "/":
