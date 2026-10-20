@@ -46,7 +46,11 @@ def runner_only_syscalls(trace: ExecutionTrace, runner_pid: int | None) -> list[
     deserialized artifact or unrelated container processes.
     """
     return [
-        replace(event, pid=runner_pid, execution_id=trace.execution_id)
+        replace(
+            event,
+            pid=runner_pid if runner_pid is not None else event.pid,
+            execution_id=trace.execution_id,
+        )
         for event in trace.syscalls
     ]
 
