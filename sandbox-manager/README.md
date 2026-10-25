@@ -12,7 +12,14 @@ collection, category datasets and the loading/deserialization scope.
 
 ## Current deployment status
 
-SHA-256 identification is enabled for normal uploads and reviewed batch collection.
+SHA-256 identification is temporarily paused for normal uploads via
+`MODEL_HASHING_ENABLED = False` in `app/policy.py`. Uploads still enter quarantine
+and execute, with hashing status recorded as `paused`. Expected-digest manifests
+cannot be verified while paused and are rejected. Reviewed batch collection
+explicitly enables hashing and remains unchanged. Set the policy to `True` and
+restart the backend to resume upload hashing.
+
+When hashing is enabled, the following identification behavior applies.
 The backend streams the submitted bytes into private quarantine while calculating
 SHA-256; it never deserializes a model on the host. Identical `.pkl`/`.pickle` bytes
 share `quarantine/<sha256>.pkl`, independent of filename. New copies are read-only,
@@ -32,8 +39,7 @@ SHA-256 proves byte identity, not model safety or category correctness.
 
 Restart the backend to activate the code. Existing unhashed analyses and quarantine
 files remain untouched; resubmit their original bytes to create a verified identity.
-No digest is invented for historical records. The explicit hashing-disable option
-is retained for legacy compatibility tests; the default policy is enabled.
+No digest is invented for historical records.
 
 The installed `runsc release-20260907.0` on x86-64 advertises 992 syscall
 tracepoints: 884 raw entry/exit points and 108 schematized points. ModelCage selects
@@ -262,6 +268,22 @@ is implemented. Image classification is a ModelCage extension requiring its own
 future benign baseline.
 
 ## Tests
+
+Run every test one by one and show each test's name and result in the terminal:
+
+```bash
+.venv/bin/python run_tests.py
+```
+
+The runner automatically collects all cases in `tests/`, including parametrized,
+network and integration tests. It continues after failures, prints each result
+(`PASSED`, `FAILED`, `SKIPPED` or `ERROR`), and ends with pytest's summary and
+failure/skip reasons. Its exit code is nonzero when tests fail. Docker/runsc and
+live capture requirements still apply; unavailable prerequisites are reported
+according to each test's existing checks. The runner can also be invoked using
+absolute paths from another directory.
+
+For individual test groups, use pytest directly:
 
 ```bash
 .venv/bin/python -m pytest -q -m 'not integration and not network'

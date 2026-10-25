@@ -90,6 +90,6 @@ EXECUTION_TIMEOUT_SECONDS = 30
 # runner command used for model deserialization.
 MODELCAGE_RUNNER_IMAGE = "modelcage-runner:phase6a"
 
-# Identify uploaded bytes before execution. Legacy unhashed records are retained;
-# they are never assigned a digest retroactively without their original bytes.
-MODEL_HASHING_ENABLED = True
+# Temporarily pause upload hashing. Set True to resume SHA-256 identification.
+# Legacy unhashed records are never assigned a digest retroactively.
+MODEL_HASHING_ENABLED = False

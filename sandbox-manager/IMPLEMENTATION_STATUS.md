@@ -1,3 +1,23 @@
+# Live instrumentation validation — 2026-10-14
+
+Added ten strict live coverage cases for known syscall counts, file/network
+operations, fork/thread attribution, concurrent sandboxes, automatic category
+routing and receiver-capacity failure handling. Added a reproducible validation
+command that saves logs, JUnit results and artifacts, and rejects skipped tests
+as evidence of completion. See [live validation](docs/live-validation.md).
+
+Actual expanded live run: **5 passed, 12 failed, 4 skipped**. Positive capture
+failed at runsc state lookup; the current account cannot traverse the default
+root-owned control directory and sudo requires a password. Full positive live
+validation remains **blocked**, not complete. Report:
+`/tmp/modelcage-live-validation-20261014/summary.json`.
+
+Non-integration validation: **188 passed across two runs** (183 without socket
+access, then the five socket tests passed with authorized access). These do not
+prove live capture. The new live fixtures cover controlled pickle loading, not
+representative ML models or inference; the existing runner still lacks ML
+dependencies. No capture-engine fix is claimed from permission-blocked tests.
+
 # Automatic category identification
 
 Uploads no longer require a category selection. The backend inspects verified

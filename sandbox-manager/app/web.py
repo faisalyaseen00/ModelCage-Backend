@@ -149,7 +149,15 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
         except (ModelInputError, ValueError) as error:
             self._page(error=str(error), status=HTTPStatus.BAD_REQUEST)
+        except PermissionError:
+            logging.getLogger(__name__).exception("Analysis startup cannot write runtime storage")
+            self._page(
+                error="Unable to start analysis: the backend cannot write to its storage. "
+                      "Check ownership and permissions of the uploads and data directories.",
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
         except Exception as error:
+            logging.getLogger(__name__).exception("Unable to start analysis")
             self._page(error="Unable to start analysis.", status=HTTPStatus.INTERNAL_SERVER_ERROR)
         finally:
             if temporary_path is not None:
