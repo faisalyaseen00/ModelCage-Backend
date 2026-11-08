@@ -8,6 +8,8 @@ import pytest
 
 from app.quarantine import QuarantineError, QuarantineStore
 
+pytestmark = pytest.mark.usefixtures("hashing_enabled")
+
 
 def test_paused_hashing_copies_without_hashing_or_reusing_old_file(tmp_path, monkeypatch):
     source = tmp_path / "input.pkl"

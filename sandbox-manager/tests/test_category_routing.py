@@ -13,6 +13,8 @@ from tests.seccheck_fixtures import manager_fixture, ProtocolSession
 from tests.test_categories import HEADS, instance
 from tests.test_datasets import candidate, setup_collector
 
+pytestmark = pytest.mark.usefixtures("hashing_enabled")
+
 
 def setup(tmp_path):
     manager, runtime = manager_fixture()

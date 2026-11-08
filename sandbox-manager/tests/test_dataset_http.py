@@ -16,7 +16,7 @@ from tests.test_categories import HEADS
 
 @pytest.mark.network
 @pytest.mark.parametrize('architecture,category', HEADS)
-def test_upload_automatically_saves_backend_csvs(tmp_path, architecture, category):
+def test_upload_automatically_saves_backend_csvs(hashing_enabled, tmp_path, architecture, category):
     manager, _ = manager_fixture()
     cage = ModelCage(str(tmp_path / 'manual.sqlite'), manager=manager, capture_factory=ProtocolSession)
     uploads = tmp_path / 'uploads'; uploads.mkdir()
@@ -51,7 +51,7 @@ def test_upload_automatically_saves_backend_csvs(tmp_path, architecture, categor
         assert rows[0]['dataset_eligible'] == 'False'
         assert rows[0]['category_source'] == 'artifact_metadata'
         page = requests.get(base, timeout=5).text
-        assert 'saved automatically in the backend' in page
+        assert 'category syscall CSVs are saved automatically' in page
         assert 'name="category"' not in page
     finally:
         server.shutdown(); server.server_close(); thread.join()
