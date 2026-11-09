@@ -198,6 +198,12 @@ candidate:
 5. **Sandbox:** the existing collector quarantines it, runs `torch.load(...,
    weights_only=False)` in a fresh runsc sandbox with SecCheck, stores raw
    events, features and metadata, destroys the sandbox and updates the registry.
+6. **Keep:** the checkpoint is exposed read-only at
+   `models/<category>/<org>__<model>/pytorch_model.bin` (a hard link to the
+   quarantined copy) with a `model.json` of its provenance and outcome.
+
+Use `--dry-run` to see the accept/reject decisions without downloading.
+A step-by-step manual test is in [huggingface-self-test.md](huggingface-self-test.md).
 
 The run stops each category after `--per-category` successful models and is
 resumable: `registry.sqlite` holds `models` (SHA-256, category, family, status,

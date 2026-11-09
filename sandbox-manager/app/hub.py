@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -65,7 +66,8 @@ class HubClient:
     def list_models(self, category, limit):
         """Most-downloaded transformers models whose pipeline tag is the category's task."""
         query = urlencode({'pipeline_tag': PIPELINE_TAGS[category], 'filter': 'transformers',
-                           'sort': 'downloads', 'direction': -1, 'limit': min(limit, 1000)})
+                           'sort': 'downloads', 'direction': -1, 'limit': min(limit, 1000),
+                           'full': 'true'})  # full=true includes each repository's revision sha
         return self._json(f'{self.base_url}/api/models?{query}')
 
     def model_info(self, repo_id):
@@ -184,6 +186,34 @@ class HubCollector(Collector):
                        (info.get('id'), info.get('sha'), category, (checkpoint or {}).get('filename'),
                         (checkpoint or {}).get('sha256'), status, reason))
 
+    def keep(self, info, category, checkpoint, details, result):
+        """Expose a downloaded checkpoint under models/<category>/<org>__<name>/.
+
+        The checkpoint is a read-only hard link to the quarantined copy (same
+        bytes, no extra disk), next to a model.json describing its provenance,
+        category acceptance and collection outcome. Nothing here is loaded.
+        """
+        source = self.workspace / 'quarantine' / f"{checkpoint['sha256']}.pkl"
+        if not source.is_file():
+            return None
+        folder = self.workspace / 'models' / category / info['id'].replace('/', '__')
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / checkpoint['filename']
+        if not target.exists():
+            try:
+                os.link(source, target)
+            except OSError:
+                shutil.copyfile(source, target)
+                target.chmod(0o400)
+        record = {'repo_id': info['id'], 'revision': info.get('sha'), 'url': f"{HUB_URL}/{info['id']}",
+                  'category': category, 'family': details['family'], 'architecture': details['architecture'],
+                  'checkpoint': checkpoint['filename'], 'sha256': checkpoint['sha256'],
+                  'size_bytes': checkpoint['size'], 'category_acceptance': details['category_acceptance'],
+                  'status': result['status'], 'reason': result['reason'], 'analysis_id': result['analysis_id'],
+                  'raw_events': f"data/raw/{category}/{result['analysis_id']}.jsonl" if result['analysis_id'] else None}
+        (folder / 'model.json').write_text(json.dumps(record, indent=2) + '\n')
+        return folder
+
     def candidate(self, info, category, retry_failed=False):
         """Run one listed model through validation, pre-download dedup and collection."""
         repo_id = info.get('id', '')
@@ -221,6 +251,9 @@ class HubCollector(Collector):
                                                   digest, checkpoint['size']),
             retry_failed=retry_failed, original_filename=f"{repo_id.replace('/', '__')}__{checkpoint['filename']}")
         self._note(info, category, checkpoint, result['status'], result['reason'] or details['category_acceptance'])
+        folder = self.keep(info, category, checkpoint, details, result)
+        if folder is not None:
+            result['model_folder'] = str(folder.relative_to(self.workspace))
         return result
 
     def run_hub(self, categories, *, per_category=5, scan_limit=100, retry_failed=False):
@@ -247,6 +280,27 @@ class HubCollector(Collector):
         return results, output
 
 
+def preview(client, categories, scan_limit):
+    """Category and checkpoint decisions for listed models, without downloading."""
+    rows = []
+    for category in categories:
+        for listed in client.list_models(category, scan_limit):
+            try:
+                info = client.model_info(listed['id'])
+            except HubError as error:
+                rows.append(dict(category=category, model_id=listed['id'], decision='rejected', reason=str(error)))
+                continue
+            details, reason = validate_hub_model(info, category)
+            checkpoint = None
+            if details is not None:
+                checkpoint, reason = select_checkpoint(info)
+            rows.append(dict(category=category, model_id=listed['id'],
+                             decision='would_download' if checkpoint else 'rejected',
+                             reason=details['category_acceptance'] if checkpoint else reason,
+                             sha256=(checkpoint or {}).get('sha256'), size_bytes=(checkpoint or {}).get('size')))
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--workspace', type=Path, required=True)
@@ -256,7 +310,15 @@ def main():
     parser.add_argument('--scan-limit', type=int, default=100, help='Hub listing size searched per category')
     parser.add_argument('--family-limit', type=int, default=20)
     parser.add_argument('--retry-failed', action='store_true')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Only list and validate candidates; no download, sandbox or registry writes')
     args = parser.parse_args()
+    if args.dry_run:
+        rows = preview(HubClient(token=os.environ.get('HF_TOKEN')), args.category or sorted(CATEGORIES), args.scan_limit)
+        for row in rows:
+            size = f"{row['size_bytes'] // 2**20} MiB" if row.get('size_bytes') else ''
+            print(f"{row['category']:<21} {row['decision']:<15} {row['model_id']:<55} {size:>9}  {row['reason']}")
+        return
     collector = HubCollector(args.workspace, family_limit=args.family_limit,
                              client=HubClient(token=os.environ.get('HF_TOKEN')))
     results, path = collector.run_hub(args.category or sorted(CATEGORIES), per_category=args.per_category,

@@ -43,11 +43,13 @@ class FakeHub:
     def __init__(self, models):
         self.models = models  # repo_id -> (info, payload)
         self.downloads = []
+        self.info_calls = []
 
     def list_models(self, category, limit):
-        return [{'id': repo_id} for repo_id in self.models][:limit]
+        return [{'id': repo_id, 'sha': self.models[repo_id][0]['sha']} for repo_id in self.models][:limit]
 
     def model_info(self, repo_id):
+        self.info_calls.append(repo_id)
         return self.models[repo_id][0]
 
     def download(self, repo_id, revision, filename, destination, expected_sha256, expected_size):
@@ -171,3 +173,33 @@ def test_stops_after_per_category_successes(tmp_path):
     results, _ = collector.run_hub(['text_classification'], per_category=2)
     assert [r['status'] for r in results] == ['succeeded', 'succeeded']
     assert len(client.downloads) == 2
+
+
+def test_downloaded_model_is_kept_in_category_folder(tmp_path):
+    payload = torch_archive()
+    collector, _, _ = hub_collector(tmp_path, {'org/bert-sst2': (info('org/bert-sst2', payload), payload)})
+    results, _ = collector.run_hub(['text_classification'])
+    folder = collector.workspace / 'models' / 'text_classification' / 'org__bert-sst2'
+    assert results[0]['model_folder'] == 'models/text_classification/org__bert-sst2'
+    assert (folder / 'pytorch_model.bin').read_bytes() == payload
+    assert not (folder / 'pytorch_model.bin').stat().st_mode & 0o222
+    record = json.loads((folder / 'model.json').read_text())
+    assert record['status'] == 'succeeded' and record['sha256'] == hashlib.sha256(payload).hexdigest()
+    assert record['raw_events'] == f"data/raw/text_classification/{results[0]['analysis_id']}.jsonl"
+
+
+def test_rejected_model_gets_no_folder(tmp_path):
+    payload = torch_archive()
+    collector, _, _ = hub_collector(tmp_path, {'org/bert': (info('org/bert', payload), torch_archive(9))})
+    results, _ = collector.run_hub(['text_classification'])
+    assert 'model_folder' not in results[0]
+    assert not (collector.workspace / 'models').exists()
+
+
+def test_rerun_skips_processed_revisions_without_hub_calls(tmp_path):
+    payload = torch_archive()
+    collector, client, _ = hub_collector(tmp_path, {'org/bert': (info('org/bert', payload), payload)})
+    collector.run_hub(['text_classification'])
+    client.info_calls.clear()
+    results, _ = collector.run_hub(['text_classification'])
+    assert results == [] and client.info_calls == [] and client.downloads == ['org/bert']
