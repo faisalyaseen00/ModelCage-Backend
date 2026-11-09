@@ -7,8 +7,11 @@ This extracts declared structure, not proof of what a malicious pickle will do.
 from dataclasses import dataclass
 from io import BytesIO
 import pickletools
+from zipfile import BadZipFile, ZipFile
 
-MAX_BYTES = 64 * 1024 * 1024
+from .policy import MAX_MODEL_BYTES
+
+MAX_BYTES = MAX_MODEL_BYTES
 MAX_OPS = 200_000
 MAX_STRING = 512
 UNKNOWN = object()
@@ -31,10 +34,33 @@ class InspectionError(ValueError):
     pass
 
 
+def torch_archive_pickle(payload):
+    """Return the pickle member of a PyTorch zip checkpoint without unpickling it.
+
+    torch.save archives hold exactly one top-level ``<name>/data.pkl``; tensor
+    storages are separate members and are never read.
+    """
+    try:
+        with ZipFile(BytesIO(payload)) as archive:
+            members = [m for m in archive.infolist()
+                       if m.filename.count('/') == 1 and m.filename.endswith('/data.pkl')]
+            if len(members) != 1:
+                return None, 'torch_archive_without_single_data_pkl'
+            if members[0].file_size > MAX_BYTES:
+                return None, 'artifact_exceeds_inspection_limit'
+            return archive.read(members[0]), None
+    except (BadZipFile, OSError, ValueError):
+        return None, 'malformed_torch_archive'
+
+
 def inspect_pickle(payload):
     """Return symbolic root and diagnostic; malformed/unsupported inputs fail closed."""
     if len(payload) > MAX_BYTES:
         return None, 'artifact_exceeds_inspection_limit'
+    if payload[:4] == b'PK\x03\x04':
+        payload, diagnostic = torch_archive_pickle(payload)
+        if diagnostic:
+            return None, diagnostic
     stack, memo = [], {}
     stream = BytesIO(payload)
 

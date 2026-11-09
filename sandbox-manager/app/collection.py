@@ -10,11 +10,12 @@ import tempfile
 from uuid import uuid4
 
 from .datasets import CATEGORIES, DatasetBuilder, PROFILE
+from .policy import MAX_MODEL_BYTES
 from .modelcage import ModelCage
 from .quarantine import QuarantineStore, normalize_sha256, open_regular
 from .categories import identify_category, VALID_CATEGORY_STATUSES
 
-MAX_BYTES = 64 * 1024 * 1024
+MAX_BYTES = MAX_MODEL_BYTES
 def validate_candidate(candidate):
     if not isinstance(candidate, dict):
         raise ValueError('Each candidate must be a JSON object')
@@ -51,7 +52,7 @@ def obtain(candidate, base, destination):
         while chunk := stream.read(1024 * 1024):
             size += len(chunk)
             if size > MAX_BYTES:
-                raise ValueError('Artifact exceeds 64 MiB loading profile limit')
+                raise ValueError(f'Artifact exceeds {MAX_BYTES // (1024 * 1024)} MiB loading profile limit')
             digest.update(chunk)
             target.write(chunk)
     value = digest.hexdigest()
@@ -75,6 +76,86 @@ class Collector:
     def db(self):
         return sqlite3.connect(self.workspace / 'registry.sqlite')
 
+    def known(self, digest):
+        """Registry row (category, status, analysis_id) for an exact SHA-256, if any."""
+        with self.db() as db:
+            return db.execute('SELECT category,status,analysis_id FROM models WHERE sha256=?', (digest,)).fetchone()
+
+    def family_full(self, category, family):
+        with self.db() as db:
+            count = db.execute("SELECT count(*) FROM models WHERE category=? AND family=? AND status='succeeded'",
+                               (category, family)).fetchone()[0]
+        return count >= self.family_limit
+
+    def _record(self, candidate, status, reason, digest, aid, claimed=False):
+        model_id = candidate.get('model_id', '') if isinstance(candidate, dict) else ''
+        with self.db() as db:
+            if claimed:
+                db.execute('UPDATE models SET status=? WHERE sha256=?', (status, digest))
+            db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?)',
+                (str(uuid4()), model_id, status, reason, digest, aid))
+        return dict(model_id=model_id, status=status, reason=reason, sha256=digest, analysis_id=aid)
+
+    def collect(self, candidate, details, fetch, *, retry_failed=False, original_filename='model.pkl'):
+        """Fetch, deduplicate by SHA-256, apply family quotas and run one candidate.
+
+        ``fetch(path)`` writes the artifact bytes to ``path`` and returns their
+        SHA-256; it must never import or deserialize them on the host.
+        """
+        aid = digest = None
+        status, reason = 'rejected', ''
+        claimed = False
+        try:
+            with tempfile.TemporaryDirectory(dir=self.workspace, prefix='incoming-') as directory:
+                suffix = Path(candidate.get('path') or original_filename).suffix.lower()
+                artifact = Path(directory) / ('model' + suffix)
+                digest = fetch(artifact)
+                model_metadata = candidate.get('metadata', {})
+                if not isinstance(model_metadata, dict):
+                    raise ValueError('Model metadata must be a JSON object')
+                model_metadata = {**model_metadata, 'architecture': details['architecture'],
+                                  'model_id': details['model_id'], 'family': details['family']}
+                reviewed_task = details['category_evidence'].get('task')
+                if reviewed_task:
+                    model_metadata['task_category'] = reviewed_task
+                assignment = identify_category(artifact.read_bytes(), candidate.get('category'), model_metadata)
+                if assignment.validation_status not in VALID_CATEGORY_STATUSES:
+                    raise ValueError(assignment.metadata['category_reason'])
+                category = assignment.task_category
+                details['category_validated'] = True
+                details['detected_category'] = category
+                with self.db() as db:
+                    old = db.execute('SELECT category,status,analysis_id FROM models WHERE sha256=?', (digest,)).fetchone()
+                    if old and old[0] != category:
+                        raise ValueError('Exact duplicate assigned to a different category')
+                    if old and (old[1] == 'succeeded' or not retry_failed):
+                        status, aid = 'duplicate', old[2]
+                    else:
+                        count = db.execute("SELECT count(*) FROM models WHERE category=? AND family=? AND status='succeeded'", (category, details['family'])).fetchone()[0]
+                        if count >= self.family_limit:
+                            status = 'quota_skipped'
+                        else:
+                            aid = str(uuid4())
+                            db.execute('INSERT OR REPLACE INTO models VALUES (?,?,?,?,?,?)',
+                                (digest, category, details['family'], aid, 'running', json.dumps(details)))
+                            claimed = True
+                if claimed:
+                    if self.cage is None:
+                        self.cage = ModelCage(str(self.workspace / 'modelcage.sqlite'))
+                    # Collection always requires exact byte identity for deduplication.
+                    self.cage.quarantine = QuarantineStore(self.workspace / 'quarantine', hashing_enabled=True)
+                    self.cage.events.begin(category=category, analysis_id=aid)
+                    self.cage.execute_model(artifact, candidate.get('category'), analysis_id=aid,
+                        manifest=model_metadata, collection_context=details,
+                        expected_sha256=digest, original_filename=original_filename)
+                    state = self.cage.events.snapshot(aid)
+                    status = state['status']
+                    reason = state.get('failure_reason') or ''
+        except Exception as error:
+            status = 'failed' if claimed else 'rejected'
+            reason = str(error)[:500] if isinstance(error, ValueError) else type(error).__name__
+        return self._record(candidate, status, reason, digest, aid, claimed)
+
     def run(self, manifest_path, *, retry_failed=False):
         manifest_path = Path(manifest_path).resolve()
         candidates = json.loads(manifest_path.read_text())
@@ -87,67 +168,18 @@ class Collector:
             with self.db() as db:
                 db.execute("UPDATE models SET status='interrupted' WHERE status='running'")
             for candidate in candidates:
-                aid = digest = None
-                status, reason = 'rejected', ''
-                claimed = False
+                details = None
                 try:
                     details = validate_candidate(candidate)
-                    with tempfile.TemporaryDirectory(dir=self.workspace, prefix='incoming-') as directory:
-                        artifact = Path(directory) / 'model.pkl'
-                        digest = obtain(candidate, manifest_path.parent, artifact)
-                        model_metadata = candidate.get('metadata', {})
-                        if not isinstance(model_metadata, dict):
-                            raise ValueError('Model metadata must be a JSON object')
-                        model_metadata = {**model_metadata, 'architecture': details['architecture'],
-                                          'model_id': details['model_id'], 'family': details['family']}
-                        reviewed_task = details['category_evidence'].get('task')
-                        if reviewed_task:
-                            model_metadata['task_category'] = reviewed_task
-                        assignment = identify_category(artifact.read_bytes(), candidate.get('category'), model_metadata)
-                        if assignment.validation_status not in VALID_CATEGORY_STATUSES:
-                            raise ValueError(assignment.metadata['category_reason'])
-                        category = assignment.task_category
-                        details['category_validated'] = True
-                        details['detected_category'] = category
-                        with self.db() as db:
-                            old = db.execute('SELECT category,status,analysis_id FROM models WHERE sha256=?', (digest,)).fetchone()
-                            if old and old[0] != category:
-                                raise ValueError('Exact duplicate assigned to a different category')
-                            if old and (old[1] == 'succeeded' or not retry_failed):
-                                status, aid = 'duplicate', old[2]
-                            else:
-                                count = db.execute("SELECT count(*) FROM models WHERE category=? AND family=? AND status='succeeded'", (category, details['family'])).fetchone()[0]
-                                if count >= self.family_limit:
-                                    status = 'quota_skipped'
-                                else:
-                                    aid = str(uuid4())
-                                    db.execute('INSERT OR REPLACE INTO models VALUES (?,?,?,?,?,?)',
-                                        (digest, category, details['family'], aid, 'running', json.dumps(details)))
-                                    claimed = True
-                        if claimed:
-                            if self.cage is None:
-                                self.cage = ModelCage(str(self.workspace / 'modelcage.sqlite'))
-                            # Collection always requires exact byte identity for deduplication.
-                            self.cage.quarantine = QuarantineStore(self.workspace / 'quarantine', hashing_enabled=True)
-                            self.cage.events.begin(category=category, analysis_id=aid)
-                            self.cage.execute_model(artifact, candidate.get('category'), analysis_id=aid,
-                                manifest=model_metadata, collection_context=details,
-                                expected_sha256=digest,
-                                original_filename=Path(candidate.get('filename') or candidate.get('path')).name)
-                            state = self.cage.events.snapshot(aid)
-                            status = state['status']
-                            reason = state.get('failure_reason') or ''
                 except Exception as error:
-                    status = 'failed' if claimed else 'rejected'
-                    reason = str(error)[:500] if isinstance(error, ValueError) else type(error).__name__
-                finally:
-                    with self.db() as db:
-                        if claimed:
-                            db.execute('UPDATE models SET status=? WHERE sha256=?', (status, digest))
-                        db.execute('INSERT INTO attempts VALUES (?,?,?,?,?,?)',
-                            (str(uuid4()), candidate.get('model_id', '') if isinstance(candidate, dict) else '', status, reason, digest, aid))
-                    results.append(dict(model_id=candidate.get('model_id', '') if isinstance(candidate, dict) else '',
-                        status=status, reason=reason, sha256=digest, analysis_id=aid))
+                    result = self._record(candidate, 'rejected', str(error)[:500] if isinstance(error, ValueError)
+                                          else type(error).__name__, None, None)
+                if details is not None:
+                    result = self.collect(candidate, details,
+                        lambda artifact: obtain(candidate, manifest_path.parent, artifact),
+                        retry_failed=retry_failed,
+                        original_filename=Path(candidate.get('filename') or candidate.get('path')).name)
+                results.append(result)
             output = DatasetBuilder(self.workspace / 'data').build()
             (self.workspace / 'collection-report.json').write_text(json.dumps(results, indent=2) + '\n')
         return results, output

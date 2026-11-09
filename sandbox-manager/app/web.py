@@ -15,9 +15,12 @@ from urllib.parse import urlparse
 
 from .modelcage import ModelCage, ModelInputError
 from .instrumentation import require_category
+from .policy import MAX_MODEL_BYTES
+from .model_runner import MODEL_SUFFIXES
 
 
-MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_BYTES = MAX_MODEL_BYTES
+MAX_UPLOAD_LABEL = f"{MAX_UPLOAD_BYTES // (1024 * 1024 * 1024)} GiB"
 _EXECUTION_ID = re.compile(r"[0-9a-f-]{36}")
 
 
@@ -89,7 +92,7 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.BAD_REQUEST)
             return
         if content_length <= 0 or content_length > MAX_UPLOAD_BYTES:
-            self._page(error="Upload must be between 1 byte and 64 MiB.", status=HTTPStatus.BAD_REQUEST)
+            self._page(error=f"Upload must be between 1 byte and {MAX_UPLOAD_LABEL}.", status=HTTPStatus.BAD_REQUEST)
             return
         if not self.headers.get("Content-Type", "").startswith("multipart/form-data"):
             self._page(error="Use the model upload form.", status=HTTPStatus.BAD_REQUEST)
@@ -101,14 +104,14 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
             environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers["Content-Type"]},
         )
         if "model" not in form or not form["model"].filename:
-            self._page(error="Choose a .pkl or .pickle model file.", status=HTTPStatus.BAD_REQUEST)
+            self._page(error="Choose a .pkl, .pickle, .bin, .pt or .pth model file.", status=HTTPStatus.BAD_REQUEST)
             return
 
         uploaded = form["model"]
         category = form.getfirst("category")
         suffix = Path(uploaded.filename).suffix.lower()
-        if suffix not in {".pkl", ".pickle"}:
-            self._page(error="Only .pkl and .pickle files are supported.", status=HTTPStatus.BAD_REQUEST)
+        if suffix not in MODEL_SUFFIXES:
+            self._page(error="Only .pkl, .pickle, .bin, .pt and .pth files are supported.", status=HTTPStatus.BAD_REQUEST)
             return
 
         temporary_path: Path | None = None
@@ -122,7 +125,7 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
                     temporary_file.write(chunk)
                     remaining -= len(chunk)
                     if remaining <= 0:
-                        raise ModelInputError("Upload exceeds the 64 MiB limit.")
+                        raise ModelInputError(f"Upload exceeds the {MAX_UPLOAD_LABEL} limit.")
 
             category = require_category(category).value if category else None
             manifest_text = form.getfirst("manifest", "")
@@ -238,9 +241,9 @@ button{{border:0;border-radius:10px;background:linear-gradient(135deg,var(--acce
 </style></head><body><main class="shell">
 <header class="topbar"><div class="brand"><span class="mark">M</span> ModelCage</div><span class="badge">LOCAL ANALYSIS CONSOLE</span></header>
 <section class="hero"><div class="eyebrow">Policy-driven runtime instrumentation</div><h1>Inspect models in a <span>disposable sandbox.</span></h1><p>Upload a pickle model and ModelCage will quarantine, identify, and execute it behind gVisor isolation while collecting syscall evidence.</p></section>
-<div class="layout"><section class="card"><div class="eyebrow">New analysis</div><h2>Submit a model</h2><p class="subtle">Supported formats: .pkl and .pickle · Maximum size: 64 MiB</p>
+<div class="layout"><section class="card"><div class="eyebrow">New analysis</div><h2>Submit a model</h2><p class="subtle">Supported formats: .pkl, .pickle and PyTorch .bin/.pt/.pth · Maximum size: {MAX_UPLOAD_LABEL}</p>
 <form method="post" action="/execute" enctype="multipart/form-data">
-<label for="model">Pickle model</label><input id="model" type="file" name="model" accept=".pkl,.pickle" required><p id="file-hint" class="subtle file-hint">Choose a .pkl or .pickle file to begin.</p>
+<label for="model">Pickle model</label><input id="model" type="file" name="model" accept=".pkl,.pickle,.bin,.pt,.pth" required><p id="file-hint" class="subtle file-hint">Choose a .pkl, .pickle, .bin, .pt or .pth file to begin.</p>
 <p class="subtle">Category identification is automatic. Models with insufficient or conflicting task information are held for review.</p>
 <label for="manifest">Model config or metadata <span class="subtle">(optional JSON)</span></label><textarea id="manifest" name="manifest" maxlength="16384" placeholder='{{"architectures":["BertForSequenceClassification"]}}'></textarea>
 <label for="family">Model family <span class="subtle">(optional)</span></label><input id="family" name="family" maxlength="200" placeholder="e.g. GPT, T5, ResNet">
@@ -268,7 +271,7 @@ if (modelInput && fileHint) {
   modelInput.addEventListener('change', () => {
     const file = modelInput.files[0];
     if (!file) {
-      fileHint.textContent = 'Choose a .pkl or .pickle file to begin.';
+      fileHint.textContent = 'Choose a .pkl, .pickle, .bin, .pt or .pth file to begin.';
       return;
     }
     const size = file.size < 1024 * 1024

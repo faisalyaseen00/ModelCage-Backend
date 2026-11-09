@@ -59,9 +59,13 @@ data only.
 
 The loading profile includes interpreter startup, imports, deserialization and
 children. It does **not** measure inference, and it does not establish that a
-model is benign. Only `.pkl`/`.pickle` up to the upload limit of 64 MiB is supported.
-The current runner contains Python/stdlib, not PyTorch, Transformers or sklearn;
-artifacts requiring unavailable dependencies fail and their outcome is recorded.
+model is benign. Only `.pkl`/`.pickle` up to the upload limit of 1 GiB is supported.
+The runner image (`modelcage-runner:ml-v1`) pins Python 3.12, CPU PyTorch,
+torchvision, Transformers, scikit-learn and NumPy, with hub access disabled and
+caches under `/tmp`. Artifacts needing other packages or custom classes fail and
+their outcome is recorded. Measurements use execution profile `pickle-load-ml-v1`;
+older `pickle-load-v1` (stdlib-only image) rows stay in metadata but are excluded
+from category datasets because import-time syscalls differ between images.
 No model code is executed or imported on the host.
 
 ## Metadata and incomplete captures
@@ -157,8 +161,56 @@ the controller digest. Successful hashes are skipped on rerun.
 Failed/interrupted records require `--retry-failed`. A single worker deliberately
 matches the host's current resource budget. `quality.json` reports category balance,
 family/architecture counts, exclusion reasons and identical feature vectors.
-Discovery, downloading, inference, clustering and OCSVM training are outside this
-upload/local-file workflow.
+Discovery and downloading are handled by the Hugging Face collector below;
+inference, clustering and OCSVM training are not implemented.
+
+## Automated Hugging Face collection
+
+`modelcage.hub` builds the three category datasets from Hugging Face without a
+hand-written manifest:
+
+```bash
+sudo .venv/bin/python -m modelcage.hub --workspace collection-hf \
+  --category text_classification --per-category 5 --family-limit 20
+```
+
+Omit `--category` to collect all three. Set `HF_TOKEN` only if you hit anonymous
+rate limits. For each category it lists the most-downloaded `transformers`
+models with the matching pipeline tag (`--scan-limit`, default 100), then per
+candidate:
+
+1. **Category check:** the model must be public and ungated, use the
+   `transformers` library, have the requested `pipeline_tag`, and have a
+   `config.json` architecture that is a recognised head for that category (for
+   example `BertForSequenceClassification`). Hub metadata is run through the
+   same resolver as uploads, so conflicting evidence is rejected. The accepted
+   reason is stored as `category_acceptance` in the registry and metadata;
+   rejected models are recorded with their reason.
+2. **Checkpoint:** a single `pytorch_model.bin` of at most 1 GiB, with a
+   SHA-256 and size from the hub's LFS metadata. safetensors-only and sharded
+   repositories are skipped: safetensors cannot execute code on load, so it has
+   no pickle-loading behaviour to profile.
+3. **Duplicate and quota check before download:** a SHA-256 already in the
+   registry is recorded as `duplicate`; a family (config `model_type`) at its
+   quota is recorded as `quota_skipped`. Neither is downloaded.
+4. **Download:** the file is streamed at the pinned revision, and its size and
+   SHA-256 must match the hub metadata, or the candidate is rejected.
+5. **Sandbox:** the existing collector quarantines it, runs `torch.load(...,
+   weights_only=False)` in a fresh runsc sandbox with SecCheck, stores raw
+   events, features and metadata, destroys the sandbox and updates the registry.
+
+The run stops each category after `--per-category` successful models and is
+resumable: `registry.sqlite` holds `models` (SHA-256, category, family, status,
+details including model ID, architecture, provider, source and revision),
+`attempts`, and `hub_candidates` (repository, revision, checkpoint, SHA-256,
+status, reason). Repositories already succeeded, rejected or duplicated at the
+same revision are not re-fetched; use `--retry-failed` to rerun failures.
+
+Automated candidates carry `benign_review` = an explicit automated-selection
+policy string ("not manually reviewed"), so they are eligible for
+`data/training/`. Review `collection-report.json` and the registry before
+training on them. The host only fetches and hashes bytes; it never imports or
+deserializes them, and the sandbox stays offline.
 
 Use the same OS user consistently for each workspace. Mixing sudo and non-sudo
 writers causes permission errors on private artifacts; no broad permission

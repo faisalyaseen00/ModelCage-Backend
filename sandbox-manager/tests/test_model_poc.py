@@ -57,11 +57,30 @@ def test_phase6a_accepts_pkl_and_pickle_and_stages_only_controlled_paths(model_a
     assert command[-1].endswith("/model.pkl")
 
 
+@pytest.mark.parametrize("suffix", [".bin", ".pt", ".pth"])
+def test_torch_checkpoints_stage_under_their_own_suffix(tmp_path, suffix):
+    manager, _ = poc_manager()
+    poc = ModelCage(tmp_path / "traces.sqlite", manager=manager, capture_factory=ProtocolSession)
+    artifact = tmp_path / f"pytorch_model{suffix}"
+    artifact.write_bytes(pickle.dumps({"weight": [0.0]}))
+    poc.execute_model(artifact, category="text_classification")
+    staged = manager.runtime.stage_files.call_args.args[1]
+    assert any(path.endswith(f"/model{suffix}") for path in staged)
+    assert manager.execute.call_args.args[1][-1].endswith(f"/model{suffix}")
+
+
+def test_runner_uses_torch_load_only_for_torch_suffixes():
+    from app.model_runner import RUNNER_SOURCE
+    assert 'endswith((".bin", ".pt", ".pth"))' in RUNNER_SOURCE
+    assert "weights_only=False" in RUNNER_SOURCE
+    assert "pickle.load(model_file)" in RUNNER_SOURCE
+
+
 def test_phase6a_rejects_unsupported_and_traversal_paths(tmp_path):
     poc = ModelCage(tmp_path / "traces.sqlite", manager=Mock())
-    unsupported = tmp_path / "model.pt"
+    unsupported = tmp_path / "model.onnx"
     unsupported.write_bytes(b"not a pickle")
-    with pytest.raises(ModelInputError, match="only .pkl and .pickle"):
+    with pytest.raises(ModelInputError, match="accepts only .pkl"):
         poc.execute_model(unsupported)
     with pytest.raises(ModelInputError, match="existing regular file"):
         poc.execute_model(tmp_path / "../missing.pkl")

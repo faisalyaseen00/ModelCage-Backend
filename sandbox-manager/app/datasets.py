@@ -12,11 +12,12 @@ import tempfile
 from .instrumentation import ModelCategory
 from .categories import VALID_CATEGORY_STATUSES
 from .syscall_names import NAMES
+from .policy import EXECUTION_PROFILE
 
 CATEGORIES = tuple(c.value for c in ModelCategory)
 # Frozen ABI vocabulary includes unknown/unassigned numbers, never drops events.
 SYSCALLS = tuple(NAMES.get(i, f'syscall_{i}') for i in range(451))
-PROFILE = 'pickle-load-v1'
+PROFILE = EXECUTION_PROFILE
 SCHEMA = 'syscall-counts-x86_64-v2'
 LEADING_SYSCALLS = ('read', 'write', 'openat', 'execve', 'connect')
 DATASET_SYSCALLS = (*LEADING_SYSCALLS, *(name for name in SYSCALLS if name not in LEADING_SYSCALLS))

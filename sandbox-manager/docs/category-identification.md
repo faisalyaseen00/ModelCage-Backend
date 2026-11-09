@@ -37,7 +37,7 @@ arrays and unsupported serialization may also require metadata.
 `app/artifact_metadata.py` uses `pickletools.genops` to interpret only a bounded
 symbolic representation of the pickle. It records references and state; it never
 imports model modules, invokes reducers/constructors, or calls a pickle unpickler.
-Tensor/storage bytes remain opaque. Limits are 64 MiB of input, 200,000 operations,
+Tensor/storage bytes remain opaque. Limits are 1 GiB of input, 200,000 operations,
 512-character retained pickle strings, and bounded metadata depth/list lengths.
 Malformed or unsupported structures do not produce guessed task evidence.
 
