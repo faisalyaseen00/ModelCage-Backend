@@ -11,6 +11,8 @@ from app.modelcage import ModelCage, ModelInputError
 from app.quarantine import QuarantineError
 from tests.seccheck_fixtures import ProtocolSession, manager_fixture
 
+pytestmark = pytest.mark.usefixtures("hashing_enabled")
+
 
 def setup(tmp_path):
     manager, runtime = manager_fixture()

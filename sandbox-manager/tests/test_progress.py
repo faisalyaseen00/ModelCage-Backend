@@ -32,7 +32,7 @@ def setup_cage(tmp_path):
     return cage, runtime, artifact
 
 
-def test_terminal_journal_and_reconnect_snapshot_match(setup_cage, caplog):
+def test_terminal_journal_and_reconnect_snapshot_match(hashing_enabled, setup_cage, caplog):
     cage, runtime, artifact = setup_cage
     with caplog.at_level(logging.INFO, logger="modelcage.lifecycle"):
         result = cage.execute_model(artifact, "text_generation")
