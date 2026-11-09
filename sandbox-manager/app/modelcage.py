@@ -19,8 +19,8 @@ from .instrumentation import (
     ModelMetadata,
     require_category,
 )
-from .model_runner import RUNNER_SOURCE, loading_failure
-from .policy import MODELCAGE_RUNNER_IMAGE
+from .model_runner import MODEL_SUFFIXES, RUNNER_SOURCE, loading_failure
+from .policy import EXECUTION_PROFILE, MODELCAGE_RUNNER_IMAGE
 from .quarantine import QuarantineError, QuarantineStore
 from .raw_events import RawEventStore
 from .storage import TraceStore
@@ -78,8 +78,11 @@ class ModelCage:
         identity_registered = False
         try:
             source = Path(model_path)
-            if source.suffix.lower() not in {".pkl", ".pickle"}:
-                raise ModelInputError("ModelCage accepts only .pkl and .pickle files.")
+            suffix = source.suffix.lower()
+            if suffix not in MODEL_SUFFIXES:
+                raise ModelInputError("ModelCage accepts only .pkl, .pickle, .bin, .pt and .pth files.")
+            # The runner selects pickle.load or torch.load from the staged name.
+            staged_model = "model.pkl" if suffix in {".pkl", ".pickle"} else f"model{suffix}"
             hashing_status = "enabled" if self.quarantine.hashing_enabled else "paused"
             emit("identifying",
                  "Calculating model SHA-256 and quarantining input" if self.quarantine.hashing_enabled
@@ -114,7 +117,7 @@ class ModelCage:
                 model_metadata = ModelMetadata(quarantined.sha256, original_filename or quarantined.original_name,
                                                source.suffix.lower(), require_category(assignment.task_category))
                 root = f"modelcage/{analysis_id}"
-                command = ["python3", f"/tmp/{root}/model_runner.py", f"/tmp/{root}/model.pkl"]
+                command = ["python3", f"/tmp/{root}/model_runner.py", f"/tmp/{root}/{staged_model}"]
                 emit("creating", "Creating disposable sandbox and verifying runsc policy")
                 container = self.manager.create(image=MODELCAGE_RUNNER_IMAGE, command=["sleep", "infinity"])
                 cleanup_status = "pending"
@@ -123,7 +126,7 @@ class ModelCage:
                 self.manager.start(container)
                 emit("sandbox_started", "Disposable sandbox started")
                 self.manager.runtime.stage_files(container,
-                    {f"{root}/model.pkl": payload, f"{root}/model_runner.py": RUNNER_SOURCE.encode()})
+                    {f"{root}/{staged_model}": payload, f"{root}/model_runner.py": RUNNER_SOURCE.encode()})
                 emit("staged", "Setup finished; starting SecCheck outside the workload")
                 session = self.capture_factory(analysis_id, container, command)
                 session.start()
@@ -203,7 +206,7 @@ class ModelCage:
                 summary.setdefault("reported_losses", None)
                 metadata = dict(analysis_id=analysis_id, sandbox_id=container, runtime="runsc",
                     filename=original_filename or (quarantined.original_name if quarantined else source.name),
-                    artifact_format=source.suffix.lower(), execution_profile="pickle-load-v1",
+                    artifact_format=source.suffix.lower(), execution_profile=EXECUTION_PROFILE,
                     runner_image=MODELCAGE_RUNNER_IMAGE,
                     collection=collection_context or {},
                     runtime_verified=container is not None, seccheck_verified=bool(summary.get("workload_root")),

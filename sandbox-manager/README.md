@@ -72,8 +72,9 @@ Use Python 3.11 or 3.12; the existing `cgi` upload parser is unavailable in 3.13
 cd /home/faisal/Documents/GitHub/ModelCage-Backend/sandbox-manager
 .venv/bin/pip install -r requirements.txt
 .venv/bin/pip install -e .
-# Only if the existing runner image has not been built:
-docker build -t modelcage-runner:phase6a -f images/model-runner.Dockerfile .
+# Build the ML runner image (Python 3.12, CPU PyTorch, torchvision,
+# Transformers, scikit-learn; several GB, first build takes a while):
+docker build -t modelcage-runner:ml-v1 -f images/model-runner.Dockerfile .
 .venv/bin/python -m modelcage.web
 ```
 
@@ -117,7 +118,7 @@ detector version are retained with each analysis. Architecture/task metadata is
 untrusted: identification does not prove model behavior or benignness, and it does
 not automatically admit an upload to the reviewed training corpus.
 
-Inspection is bounded to 64 MiB and 200,000 pickle operations. Unsupported or
+Inspection is bounded to 1 GiB and 200,000 pickle operations. Unsupported or
 opaque reconstruction, inspection limits and missing metadata may require review.
 No downloads, model-hub lookup, `.pt` support or inference were added. Explicit
 categories remain compatible for existing API/reviewed batch clients, but cannot
@@ -194,8 +195,8 @@ schematized duplicates are excluded by configuration and decoder checks.
   or collector shutdown fails, metadata reports failure/partial capture. Automatic
   recovery following an abrupt backend/host crash is not implemented.
 
-The 30-second execution budget includes the harness and its descendants. Phase 1
-restrictions remain: read-only root, private `/tmp` tmpfs, 512 MiB memory, one CPU,
+The 60-second execution budget includes the harness and its descendants. Phase 1
+restrictions remain: read-only root, private `/tmp` tmpfs, 4 GiB memory (the staged model in tmpfs counts towards it), one CPU,
 64 PIDs, no capabilities, no privileged mode, no host mounts and offline networking.
 Old low-level Phase 1/legacy trace helpers remain for compatibility; the
 `ModelCage.execute_model` path exclusively requires SecCheck.

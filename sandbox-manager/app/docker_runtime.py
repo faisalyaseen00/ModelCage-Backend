@@ -363,7 +363,7 @@ class DockerRuntime:
             if not path.startswith("modelcage/") or posixpath.isabs(path) or ".." in path.split("/"):
                 raise DockerRuntimeError("ModelCage staging paths must remain under /tmp/modelcage")
             connection = None
-            deadline = monotonic() + 30
+            deadline = monotonic() + max(30, len(content) / (8 * 1024 * 1024))
             try:
                 execution = self.client.api.exec_create(
                     container=container,

@@ -2,6 +2,11 @@
 
 import re
 
+# Plain pickles are loaded with pickle.load; PyTorch checkpoints with torch.load.
+PICKLE_SUFFIXES = frozenset({".pkl", ".pickle"})
+TORCH_SUFFIXES = frozenset({".bin", ".pt", ".pth"})
+MODEL_SUFFIXES = PICKLE_SUFFIXES | TORCH_SUFFIXES
+
 
 def loading_failure(output, exit_code):
     """Summarize known loading errors without publishing arbitrary model output.
@@ -30,6 +35,12 @@ if len(sys.argv) != 2:
     raise SystemExit("expected exactly one model path")
 
 Path(sys.argv[1]).with_name("runner.pid").write_text(str(os.getpid()), encoding="ascii")
-with open(sys.argv[1], "rb") as model_file:
-    pickle.load(model_file)
+if sys.argv[1].endswith((".bin", ".pt", ".pth")):
+    # PyTorch checkpoints are loaded the way a victim's from_pretrained/torch.load
+    # would, so pickle reducers inside the archive execute here, in the sandbox.
+    import torch
+    torch.load(sys.argv[1], map_location="cpu", weights_only=False)
+else:
+    with open(sys.argv[1], "rb") as model_file:
+        pickle.load(model_file)
 '''

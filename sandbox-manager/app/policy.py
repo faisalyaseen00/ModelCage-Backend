@@ -12,7 +12,11 @@ FORBIDDEN_MOUNT_OPTIONS = frozenset({"binds", "mounts", "volumes", "volumes_from
 
 # Phase 3.2 resource isolation. Values are passed to Docker as bytes and
 # nanoseconds of CPU time so inspection can validate them without conversion.
-MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
+# Real model pickles are staged into /tmp tmpfs, which gVisor charges to the
+# sandbox's memory, and are then deserialized alongside PyTorch/Transformers.
+# 4 GiB covers a MAX_MODEL_BYTES artifact twice over plus library imports while
+# leaving room for two concurrent sandboxes on a 16 GiB host.
+MEMORY_LIMIT_BYTES = 4 * 1024 * 1024 * 1024
 CPU_LIMIT_NANO_CPUS = 1_000_000_000
 PID_LIMIT = 64
 FORBIDDEN_RESOURCE_OPTIONS = frozenset(
@@ -84,11 +88,20 @@ FORBIDDEN_ISOLATION_OPTIONS = frozenset(
 )
 
 # Phase 3.5 execution isolation. This is intentionally not caller-configurable.
-EXECUTION_TIMEOUT_SECONDS = 30
+EXECUTION_TIMEOUT_SECONDS = 60
 
-# Phase 6A controlled pickle runner image. Callers cannot select the image or
-# runner command used for model deserialization.
-MODELCAGE_RUNNER_IMAGE = "modelcage-runner:phase6a"
+# Controlled ML pickle runner image (images/model-runner.Dockerfile). Callers
+# cannot select the image or runner command used for model deserialization.
+MODELCAGE_RUNNER_IMAGE = "modelcage-runner:ml-v1"
+
+# Execution profile recorded with every measurement. Changing the runner image
+# changes import-time syscall behaviour, so measurements from different
+# profiles are never mixed in the same category dataset.
+EXECUTION_PROFILE = "pickle-load-ml-v1"
+
+# Largest model artifact accepted by uploads, batch collection and symbolic
+# category inspection.
+MAX_MODEL_BYTES = 1024 * 1024 * 1024
 
 # Temporarily pause upload hashing. Set True to resume SHA-256 identification.
 # Legacy unhashed records are never assigned a digest retroactively.
