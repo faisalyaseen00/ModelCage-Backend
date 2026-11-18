@@ -41,7 +41,7 @@ Restart the backend to activate the code. Existing unhashed analyses and quarant
 files remain untouched; resubmit their original bytes to create a verified identity.
 No digest is invented for historical records.
 
-The installed `runsc release-20260907.0` on x86-64 advertises 992 syscall
+The installed `runsc release-20261019.0` on x86-64 advertises 992 syscall
 tracepoints: 884 raw entry/exit points and 108 schematized points. ModelCage selects
 884 non-duplicating syscall number/phase points, preferring schematized variants.
 Three sentry lifecycle points are subscribed solely for process-tree attribution.
@@ -159,7 +159,7 @@ by the model file. The current harness deserializes a pickle; category-specific
 inference inputs and `.pt` loading remain unimplemented.
 
 The source protocol and schemas are pinned to the installed release:
-[gVisor SecCheck](https://github.com/google/gvisor/tree/release-20260907.0/pkg/sentry/seccheck).
+[gVisor SecCheck](https://github.com/google/gvisor/tree/release-20261019.0/pkg/sentry/seccheck).
 Generated protobuf code, source schemas, license and provenance are bundled under
 `app/seccheck_proto`. A different runsc release/ABI fails closed pending validation.
 

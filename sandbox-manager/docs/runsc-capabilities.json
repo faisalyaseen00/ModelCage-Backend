@@ -1,7 +1,7 @@
 {
-  "runsc_version": "runsc version release-20260907.0\nspec: 1.2.1",
+  "runsc_version": "runsc version release-20261019.0\nspec: 1.2.1",
   "architecture": "x86_64",
-  "binary_sha256": "3e0df2fa28f6ff5430b004f92573b81b75f442f78c780e0c85fdf6c2d572817a",
+  "binary_sha256": "5b4016fa43a9d35835253925cb6d05d3e42fdb9eb8bcd426c8b25444090e93e6",
   "available_syscall_tracepoints": [
     "syscall/accept/enter",
     "syscall/accept/exit",

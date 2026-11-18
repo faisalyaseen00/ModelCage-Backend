@@ -104,6 +104,12 @@ sudo .venv/bin/python -m modelcage.hub --workspace hf-data \
   --category text_generation --category text_classification --per-category 20 --scan-limit 500
 ```
 
+While it runs, the collector prints every step to the terminal: each Hugging
+Face HTTP request with its status, the category and checkpoint decision, the
+deduplication check, a live download bar, the SHA-256 check, each sandbox
+lifecycle event (quarantine, runsc check, SecCheck attach, live syscall count,
+cleanup) and the result per model. Stop it with Ctrl+C, not Ctrl+Z.
+
 | Option | Default | Meaning |
 |---|---|---|
 | `--workspace` | required | Folder that holds everything for this collection |
@@ -226,7 +232,7 @@ Docker error.
 
 - gVisor SecCheck streams events over a private per-sandbox socket to the host.
 - It subscribes to every available syscall entry and exit point (884 points
-  on runsc `release-20260907.0`).
+  on runsc `release-20261019.0`).
 - Only the runner process and its children and threads are recorded. Docker,
   runsc, container setup and other sandboxes are excluded.
 - Lost events, invalid packets, unmatched entry/exit pairs and the 250,000

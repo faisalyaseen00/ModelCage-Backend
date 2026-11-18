@@ -15,9 +15,12 @@ import argparse
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
+import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -42,22 +45,100 @@ class HubError(RuntimeError):
     """Hugging Face API or download failure."""
 
 
+class Report:
+    """Silent progress sink; TerminalReport prints each step for a person watching."""
+
+    def step(self, label, text, mark=None):
+        pass
+
+    def heading(self, text):
+        pass
+
+    def live(self, label, text):
+        pass
+
+
+class TerminalReport(Report):
+    """Step-by-step collection progress on stderr. Shows real requests and sandbox events only."""
+
+    MARKS = {'ok': ('✓', '32'), 'fail': ('✗', '31'), 'skip': ('–', '33'), None: (' ', '0')}
+
+    def __init__(self, stream=sys.stderr):
+        self.stream = stream
+        self.tty = stream.isatty()
+        self._live = False
+        self._last_live = 0.0
+
+    def _color(self, text, code):
+        return f'\033[{code}m{text}\033[0m' if self.tty and code != '0' else text
+
+    def _end_live(self):
+        if self._live:
+            self.stream.write('\n')
+            self._live = False
+
+    def heading(self, text):
+        self._end_live()
+        print(f"\n{time.strftime('%H:%M:%S')}  {self._color(text, '1')}", file=self.stream, flush=True)
+
+    def step(self, label, text, mark=None):
+        self._end_live()
+        symbol, code = self.MARKS[mark]
+        print(f"{time.strftime('%H:%M:%S')}    {label:<11}{self._color(symbol, code)} {text}",
+              file=self.stream, flush=True)
+
+    def live(self, label, text):
+        """Overwrite one line in place (a terminal only), at most four times a second."""
+        if not self.tty or time.monotonic() - self._last_live < 0.25:
+            return
+        self._last_live = time.monotonic()
+        self.stream.write(f"\r{time.strftime('%H:%M:%S')}    {label:<11}  {text}\033[K")
+        self.stream.flush()
+        self._live = True
+
+
+class LifecycleToReport(logging.Handler):
+    """Forward ModelCage's own sandbox lifecycle log (quarantine → runsc → SecCheck → cleanup)."""
+
+    def __init__(self, report):
+        super().__init__(logging.INFO)
+        self.report = report
+
+    def emit(self, record):
+        # Lifecycle records are logged as (timestamp, analysis_id, message).
+        message = record.args[-1] if isinstance(record.args, tuple) and record.args else record.getMessage()
+        if message.startswith('Syscall entries received: '):
+            self.report.live('capture', f"gVisor SecCheck: {int(message.rsplit(' ', 1)[1]):,} syscalls received")
+            return
+        mark = 'fail' if record.levelno >= logging.ERROR else 'skip' if record.levelno >= logging.WARNING else None
+        self.report.step('sandbox', message, mark)
+
+
+def mib(size):
+    return f'{size / 2**20:,.0f} MiB'
+
+
 class HubClient:
     """Minimal read-only Hugging Face Hub API client over HTTPS."""
 
-    def __init__(self, base_url=HUB_URL, token=None, timeout=60):
+    def __init__(self, base_url=HUB_URL, token=None, timeout=60, report=None):
         self.base_url = base_url.rstrip('/')
         self.token = token
         self.timeout = timeout
+        self.report = report or Report()
 
     def _open(self, url):
         headers = {'User-Agent': 'modelcage-collector/1'}
         if self.token:
             headers['Authorization'] = f'Bearer {self.token}'
+        started = time.monotonic()
         try:
-            return urlopen(Request(url, headers=headers), timeout=self.timeout)
+            response = urlopen(Request(url, headers=headers), timeout=self.timeout)
         except (HTTPError, URLError, TimeoutError) as error:
+            self.report.step('http', f'GET {url} → {error}', 'fail')
             raise HubError(f'{url}: {error}') from error
+        self.report.step('http', f'GET {url} → HTTP {response.status} ({time.monotonic() - started:.1f}s)')
+        return response
 
     def _json(self, url):
         with self._open(url) as response:
@@ -78,6 +159,7 @@ class HubClient:
         """Stream one file at a pinned revision, enforcing size and SHA-256."""
         url = f'{self.base_url}/{quote(repo_id, safe="/")}/resolve/{revision}/{quote(filename)}'
         digest, size = hashlib.sha256(), 0
+        started = time.monotonic()
         with self._open(url) as response, Path(destination).open('xb') as target:
             Path(destination).chmod(0o600)
             while chunk := response.read(1024 * 1024):
@@ -86,9 +168,16 @@ class HubClient:
                     raise ValueError('Download exceeds the expected or permitted size')
                 digest.update(chunk)
                 target.write(chunk)
+                rate = size / max(time.monotonic() - started, 1e-3) / 2**20
+                done = size * 30 // max(expected_size, 1)
+                self.report.live('download', f"[{'#' * done}{'.' * (30 - done)}] {mib(size)} / {mib(expected_size)}"
+                                             f"  {rate:.1f} MiB/s")
+        self.report.step('download', f'{mib(size)} in {time.monotonic() - started:.0f}s', 'ok')
         value = digest.hexdigest()
         if size != expected_size or value != expected_sha256:
+            self.report.step('verify', 'downloaded bytes do NOT match the hub SHA-256/size; discarded', 'fail')
             raise ValueError('Downloaded bytes do not match the hub SHA-256/size')
+        self.report.step('verify', f'size and SHA-256 match the hub ({value[:16]}…)', 'ok')
         return value
 
 
@@ -168,9 +257,10 @@ def validate_hub_model(info, category):
 class HubCollector(Collector):
     """Collector whose candidates come from Hugging Face instead of a local manifest."""
 
-    def __init__(self, workspace, *, client=None, **options):
+    def __init__(self, workspace, *, client=None, report=None, **options):
         super().__init__(workspace, **options)
         self.client = client or HubClient()
+        self.report = report or Report()
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS hub_candidates (repo_id TEXT, revision TEXT, category TEXT, '
                        'filename TEXT, sha256 TEXT, status TEXT, reason TEXT, PRIMARY KEY (repo_id, revision))')
@@ -218,31 +308,42 @@ class HubCollector(Collector):
         """Run one listed model through validation, pre-download dedup and collection."""
         repo_id = info.get('id', '')
         stub = {'model_id': repo_id}
+        report = self.report
         try:
             info = self.client.model_info(repo_id)
         except HubError as error:
+            report.step('result', 'hub metadata unavailable; rejected', 'fail')
             return self._record(stub, 'rejected', str(error)[:500], None, None)
         details, reason = validate_hub_model(info, category)
         checkpoint = None
         if details is not None:
+            report.step('category', details['category_acceptance'], 'ok')
             checkpoint, reason = select_checkpoint(info)
         if checkpoint is None:
+            report.step('category' if details is None else 'checkpoint', f'rejected: {reason}', 'fail')
             self._note(info, category, None, 'rejected', reason)
             return self._record(stub, 'rejected', reason, None, None)
         digest = checkpoint['sha256']
+        report.step('checkpoint', f"{checkpoint['filename']} · {mib(checkpoint['size'])} · "
+                                  f"hub SHA-256 {digest[:16]}… · revision {str(info.get('sha'))[:12]}", 'ok')
         known = self.known(digest)
         if known and known[0] != category:
             reason = f'SHA-256 already registered under {known[0]}'
+            report.step('dedup', f'{reason}; rejected', 'fail')
             self._note(info, category, checkpoint, 'rejected', reason)
             return self._record(stub, 'rejected', reason, digest, known[2])
         if known and (known[1] == 'succeeded' or not retry_failed):
             # Exact duplicate by hub-reported SHA-256: skipped before any download.
+            report.step('dedup', f'SHA-256 already in registry ({known[1]}); not downloaded', 'skip')
             self._note(info, category, checkpoint, 'duplicate', 'SHA-256 already in registry')
             return self._record(stub, 'duplicate', 'SHA-256 already in registry; not downloaded', digest, known[2])
         if self.family_full(category, details['family']):
             reason = f"family {details['family']!r} reached its quota of {self.family_limit}"
+            report.step('dedup', f'{reason}; not downloaded', 'skip')
             self._note(info, category, checkpoint, 'quota_skipped', reason)
             return self._record(stub, 'quota_skipped', reason + '; not downloaded', digest, None)
+        report.step('dedup', 'retrying a previous failure' if known else
+                    f"new SHA-256; family {details['family']!r} under its quota", 'ok')
         details['checkpoint'] = checkpoint['filename']
         candidate = {'model_id': repo_id, 'category': category, 'sha256': digest,
                      'metadata': {'task_category': category, **hub_metadata(info)}}
@@ -254,6 +355,13 @@ class HubCollector(Collector):
         folder = self.keep(info, category, checkpoint, details, result)
         if folder is not None:
             result['model_folder'] = str(folder.relative_to(self.workspace))
+        state = self.cage.events.snapshot(result['analysis_id']) if self.cage and result['analysis_id'] else {}
+        summary = (f"{result['status']} · {state.get('event_count', 0):,} syscalls · "
+                   f"capture {state.get('capture_status', 'not_started')}")
+        if result['status'] == 'succeeded':
+            report.step('result', f"{summary} · row added to data/features/{category}.csv", 'ok')
+        else:
+            report.step('result', f"{summary} · {result['reason'] or 'no reason recorded'}", 'fail')
         return result
 
     def run_hub(self, categories, *, per_category=5, scan_limit=100, retry_failed=False):
@@ -265,16 +373,23 @@ class HubCollector(Collector):
                 db.execute("UPDATE models SET status='interrupted' WHERE status='running'")
             for category in categories:
                 succeeded = 0
-                for listed in self.client.list_models(category, scan_limit):
+                self.report.heading(f'{category}: listing the top {scan_limit} models for pipeline tag '
+                                    f'{PIPELINE_TAGS[category]!r} by downloads')
+                listing = self.client.list_models(category, scan_limit)
+                for position, listed in enumerate(listing, 1):
                     if succeeded >= per_category:
                         break
                     seen = self._seen(listed.get('id'), listed.get('sha')) if listed.get('sha') else None
                     if seen and seen[0] in {'succeeded', 'rejected', 'duplicate'} and not retry_failed:
                         continue
+                    self.report.heading(f"[{category} {position}/{len(listing)} · collected {succeeded}/{per_category}]"
+                                        f" {listed.get('id')}")
                     result = self.candidate(listed, category, retry_failed)
                     result['category'] = category
                     results.append(result)
                     succeeded += result['status'] == 'succeeded'
+                self.report.heading(f'{category}: {succeeded} new model(s) collected')
+            self.report.heading('Rebuilding category datasets from raw events')
             output = DatasetBuilder(self.workspace / 'data').build()
             (self.workspace / 'collection-report.json').write_text(json.dumps(results, indent=2) + '\n')
         return results, output
@@ -319,11 +434,24 @@ def main():
             size = f"{row['size_bytes'] // 2**20} MiB" if row.get('size_bytes') else ''
             print(f"{row['category']:<21} {row['decision']:<15} {row['model_id']:<55} {size:>9}  {row['reason']}")
         return
-    collector = HubCollector(args.workspace, family_limit=args.family_limit,
-                             client=HubClient(token=os.environ.get('HF_TOKEN')))
+    report = TerminalReport()
+    lifecycle = logging.getLogger('modelcage.lifecycle')
+    lifecycle.addHandler(LifecycleToReport(report))
+    lifecycle.setLevel(logging.INFO)
+    lifecycle.propagate = False
+    token = os.environ.get('HF_TOKEN')
+    report.heading(f"Source: Hugging Face public REST API at {HUB_URL} "
+                   f"({'HF_TOKEN set' if token else 'anonymous, no token'}); read-only, nothing is uploaded")
+    report.heading(f'Workspace: {args.workspace.resolve()}')
+    collector = HubCollector(args.workspace, family_limit=args.family_limit, report=report,
+                             client=HubClient(token=token, report=report))
     results, path = collector.run_hub(args.category or sorted(CATEGORIES), per_category=args.per_category,
                                       scan_limit=args.scan_limit, retry_failed=args.retry_failed)
-    print(json.dumps({'results': results, 'datasets': str(path)}, indent=2))
+    counts = {}
+    for result in results:
+        counts[result['status']] = counts.get(result['status'], 0) + 1
+    report.heading('Done: ' + ', '.join(f'{count} {status}' for status, count in sorted(counts.items())))
+    report.heading(f"Datasets: {path} · full report: {args.workspace / 'collection-report.json'}")
 
 
 if __name__ == '__main__':
