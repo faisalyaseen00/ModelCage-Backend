@@ -212,8 +212,32 @@ class CollectionHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.server.state.snapshot(int(after) if after.isdigit() else 0))
         elif url.path == '/api/summary':
             self._send(HTTPStatus.OK, self.server.state.summary())
+        elif url.path.startswith('/api/download/'):
+            self._download(url.path.removeprefix('/api/download/'))
         else:
             self._send(HTTPStatus.NOT_FOUND, {'error': 'not found'})
+
+    def _download(self, relative):
+        """Serve one dataset file the root-owned workspace keeps private (mode 600).
+
+        Only names in DOWNLOADS are served, so raw traces, quarantine and models stay private.
+        """
+        view, _, name = relative.partition('/')
+        if name not in DOWNLOADS.get(view, ()):
+            self._send(HTTPStatus.NOT_FOUND, {'error': 'not a downloadable dataset file'})
+            return
+        try:
+            data = (self.server.state.workspace / 'data' / view / name).read_bytes()
+        except OSError:
+            self._send(HTTPStatus.NOT_FOUND, {'error': 'file not built yet; run a collection first'})
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header('Content-Type', 'text/csv; charset=utf-8' if name.endswith('.csv') else 'application/json')
+        # Prefix the view so training and measurement copies of the same name don't overwrite each other.
+        self.send_header('Content-Disposition', f'attachment; filename="{view}-{name}"')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):  # noqa: N802
         path = urlparse(self.path).path
@@ -248,6 +272,11 @@ class CollectionHandler(BaseHTTPRequestHandler):
         """Polling would flood the terminal; collection progress is printed instead."""
 
 
+# data/training is the strict OCSVM training view; data/datasets holds every complete measurement.
+DOWNLOADS = {view: {*(f'{c}{suffix}' for c in CATEGORIES for suffix in ('.csv', '.normalized.csv')),
+                    'metadata.csv', 'quality.json', 'schema.json'}
+             for view in ('training', 'datasets')}
+
 STEPS = [('category', 'Category check'), ('checkpoint', 'Checkpoint'), ('dedup', 'Deduplication'),
          ('download', 'Download'), ('verify', 'SHA-256 verify'), ('sandbox', 'gVisor sandbox'),
          ('capture', 'Syscall capture'), ('result', 'Result')]
@@ -278,6 +307,7 @@ code{color:var(--accent);font:12px ui-monospace,SFMono-Regular,monospace;overflo
 .bar{height:6px;border-radius:9px;background:#0b1628;margin-top:7px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#6ca8ff);transition:width .3s}
 #log{background:#070f1c;border:1px solid var(--line);border-radius:12px;height:420px;overflow:auto;padding:12px 14px;font:12px/1.65 ui-monospace,SFMono-Regular,monospace}#log div{white-space:pre-wrap;overflow-wrap:anywhere}#log .hd{color:var(--text);font-weight:700;margin-top:8px}#log .tm{color:#5d7090}#log .lb{color:#6ca8ff}#log .ok{color:var(--accent)}#log .fail{color:var(--danger)}#log .skip{color:var(--warn)}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 8px;border-top:1px solid var(--line);overflow-wrap:anywhere}th{color:var(--muted);font-weight:600;font-size:12px}td.s-succeeded{color:var(--accent)}td.s-failed,td.s-incomplete,td.s-timed_out,td.s-instrumentation_unavailable{color:var(--danger)}
+.dl{display:flex;flex-wrap:wrap;gap:6px}.dl a,#extras a{display:inline-block;border:1px solid var(--line);background:var(--soft);border-radius:8px;color:var(--accent);font-size:12px;font-weight:700;padding:5px 10px;text-decoration:none;white-space:nowrap}.dl a:hover{border-color:var(--accent)}#extras{margin-top:12px}
 .wide{grid-column:1/-1}@media(max-width:860px){.grid{grid-template-columns:1fr}.stats,.steps{grid-template-columns:repeat(2,minmax(0,1fr))}.fields{grid-template-columns:1fr}.top .pill.hide-sm{display:none}}
 </style></head><body><main class="shell">
 <header class="top"><div class="brand"><span class="mark">M</span> ModelCage</div><div style="display:flex;gap:8px"><span id="priv" class="pill hide-sm">checking privileges…</span><span id="runstate" class="pill">idle</span></div></header>
@@ -308,6 +338,9 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 <section class="card current" id="current" hidden><div class="eyebrow">Now processing</div><div class="model" id="model">—</div><div class="steps" id="steps"></div></section>
 <div class="grid" style="margin-top:18px">
 <section class="card wide"><div class="eyebrow">Activity</div><h2>Live log</h2><div id="log"><div class="tm">No run yet. Choose settings and press Start.</div></div></section>
+<section class="card wide"><div class="eyebrow">Download</div><h2>Datasets</h2><p class="muted" style="margin:0 0 10px"><b>Training</b> is the strict set for OCSVM training (successful, complete, verified runs only). <b>All measurements</b> also includes complete captures of models that failed to load. Files are rebuilt after every run.</p>
+<div style="overflow:auto"><table><thead><tr><th>Category</th><th>Training rows</th><th>Measured rows</th><th>Download</th></tr></thead><tbody id="downloads"></tbody></table></div>
+<div class="dl" id="extras"></div></section>
 <section class="card wide"><div class="eyebrow">Registry</div><h2>Collected models</h2><div class="muted" id="cand"></div><div style="overflow:auto"><table><thead><tr><th>Model</th><th>Category</th><th>Family</th><th>Status</th><th>SHA-256</th></tr></thead><tbody id="models"><tr><td colspan="5" class="muted">Nothing collected yet.</td></tr></tbody></table></div></section>
 </div>
 </main>
@@ -376,6 +409,18 @@ async function summary() {
     for (const c of CATEGORIES) s.append(stat(v.datasets[c].training, c.replace('_', ' ') + ' · training rows (' + v.datasets[c].datasets + ' measured)'));
     const ok = v.models.filter(m => m.status === 'succeeded').length;
     s.append(stat(ok + ' / ' + v.models.length, 'models succeeded / downloaded'));
+    const link = (href, text) => { const a = el('a', '', text); a.href = '/api/download/' + href; a.download = ''; return a; };
+    const dl = $('downloads'); dl.textContent = '';
+    for (const c of CATEGORIES) {
+      const r = el('tr'), td = el('td'), box = el('div', 'dl');
+      box.append(link('training/' + c + '.csv', 'Training CSV'), link('training/' + c + '.normalized.csv', 'Training normalized'),
+        link('datasets/' + c + '.csv', 'All measurements'), link('datasets/' + c + '.normalized.csv', 'All normalized'));
+      td.append(box);
+      r.append(el('td', '', c.replace('_', ' ')), el('td', '', String(v.datasets[c].training)), el('td', '', String(v.datasets[c].datasets)), td);
+      dl.append(r);
+    }
+    if (!$('extras').childElementCount) $('extras').append(link('datasets/metadata.csv', 'metadata.csv (every run)'),
+      link('training/quality.json', 'quality.json (balance, exclusions)'), link('datasets/schema.json', 'schema.json (column order)'));
     $('cand').textContent = 'Hub repositories examined: ' + (Object.entries(v.candidates).map(([k, n]) => n + ' ' + k).join(' · ') || 'none yet');
     const body = $('models'); body.textContent = '';
     if (!v.models.length) { const r = el('tr'); const td = el('td', 'muted', 'Nothing collected yet.'); td.colSpan = 5; r.append(td); body.append(r); }

@@ -132,7 +132,9 @@ sudo .venv/bin/python -m modelcage.collect_web --workspace hf-data
 Open <http://127.0.0.1:8090>. The page starts and stops runs (including dry
 runs), shows each model's steps (category, checkpoint, dedup, download bar,
 SHA-256, sandbox, live syscall count, result), the full live log, dataset row
-counts and the registry. It shows the same real events as the terminal output.
+counts and the registry. Its Datasets section downloads the training and
+measurement CSVs, which are root-owned and private (mode 600) on disk; only
+those dataset files are served, never raw traces, quarantine or models. It shows the same real events as the terminal output.
 It listens on localhost only; one run at a time per workspace.
 
 ### 3.5 Resume or extend
