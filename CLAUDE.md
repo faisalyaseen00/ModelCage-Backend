@@ -149,6 +149,7 @@ capture, parallel workers.
 - Tests: `.venv/bin/python run_tests.py`, or `.venv/bin/python -m pytest -q -m 'not integration and not network'`.
   As of 2026-11-18, 15 quarantine/hashing tests fail because `MODEL_HASHING_ENABLED = False` in `app/policy.py`.
 - Web UI: `.venv/bin/python -m modelcage.web` → http://127.0.0.1:8080
+- Collection dashboard: `sudo .venv/bin/python -m modelcage.collect_web --workspace hf-data` → http://127.0.0.1:8090
 - Never `torch.load` or `pickle.load` a collected model on the host; they are untrusted.
 - Changing the runner image or its libraries changes syscall profiles: bump `EXECUTION_PROFILE` in `app/policy.py`.
 - Collection workspaces must always be used with the same user (`sudo`).

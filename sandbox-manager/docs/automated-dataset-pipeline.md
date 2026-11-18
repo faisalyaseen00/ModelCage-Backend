@@ -123,7 +123,19 @@ cleanup) and the result per model. Stop it with Ctrl+C, not Ctrl+Z.
 Use the same OS user (always `sudo`) for one workspace; mixing users causes
 permission errors on private files.
 
-### 3.4 Resume or extend
+### 3.4 Browser dashboard
+
+```bash
+sudo .venv/bin/python -m modelcage.collect_web --workspace hf-data
+```
+
+Open <http://127.0.0.1:8090>. The page starts and stops runs (including dry
+runs), shows each model's steps (category, checkpoint, dedup, download bar,
+SHA-256, sandbox, live syscall count, result), the full live log, dataset row
+counts and the registry. It shows the same real events as the terminal output.
+It listens on localhost only; one run at a time per workspace.
+
+### 3.5 Resume or extend
 
 Run the same command again. The pipeline:
 
@@ -132,7 +144,7 @@ Run the same command again. The pipeline:
 - marks runs left `running` by an interrupted process as `interrupted` (rerun them with `--retry-failed`);
 - holds a lock, so two collectors cannot work on one workspace at once.
 
-### 3.5 Rebuild the datasets offline
+### 3.6 Rebuild the datasets offline
 
 Features can be regenerated from the stored raw events without running any
 model again, for example after changing feature code:

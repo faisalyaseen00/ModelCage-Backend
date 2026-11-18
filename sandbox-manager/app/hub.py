@@ -54,7 +54,7 @@ class Report:
     def heading(self, text):
         pass
 
-    def live(self, label, text):
+    def live(self, label, text, fraction=None):
         pass
 
 
@@ -87,7 +87,7 @@ class TerminalReport(Report):
         print(f"{time.strftime('%H:%M:%S')}    {label:<11}{self._color(symbol, code)} {text}",
               file=self.stream, flush=True)
 
-    def live(self, label, text):
+    def live(self, label, text, fraction=None):
         """Overwrite one line in place (a terminal only), at most four times a second."""
         if not self.tty or time.monotonic() - self._last_live < 0.25:
             return
@@ -171,7 +171,7 @@ class HubClient:
                 rate = size / max(time.monotonic() - started, 1e-3) / 2**20
                 done = size * 30 // max(expected_size, 1)
                 self.report.live('download', f"[{'#' * done}{'.' * (30 - done)}] {mib(size)} / {mib(expected_size)}"
-                                             f"  {rate:.1f} MiB/s")
+                                             f"  {rate:.1f} MiB/s", size / max(expected_size, 1))
         self.report.step('download', f'{mib(size)} in {time.monotonic() - started:.0f}s', 'ok')
         value = digest.hexdigest()
         if size != expected_size or value != expected_sha256:
@@ -261,6 +261,7 @@ class HubCollector(Collector):
         super().__init__(workspace, **options)
         self.client = client or HubClient()
         self.report = report or Report()
+        self.stop_requested = False  # set from another thread; honoured between models
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS hub_candidates (repo_id TEXT, revision TEXT, category TEXT, '
                        'filename TEXT, sha256 TEXT, status TEXT, reason TEXT, PRIMARY KEY (repo_id, revision))')
@@ -377,7 +378,7 @@ class HubCollector(Collector):
                                     f'{PIPELINE_TAGS[category]!r} by downloads')
                 listing = self.client.list_models(category, scan_limit)
                 for position, listed in enumerate(listing, 1):
-                    if succeeded >= per_category:
+                    if succeeded >= per_category or self.stop_requested:
                         break
                     seen = self._seen(listed.get('id'), listed.get('sha')) if listed.get('sha') else None
                     if seen and seen[0] in {'succeeded', 'rejected', 'duplicate'} and not retry_failed:
@@ -389,17 +390,24 @@ class HubCollector(Collector):
                     results.append(result)
                     succeeded += result['status'] == 'succeeded'
                 self.report.heading(f'{category}: {succeeded} new model(s) collected')
+                if self.stop_requested:
+                    self.report.heading('Stopped on request after the current model')
+                    break
             self.report.heading('Rebuilding category datasets from raw events')
             output = DatasetBuilder(self.workspace / 'data').build()
             (self.workspace / 'collection-report.json').write_text(json.dumps(results, indent=2) + '\n')
         return results, output
 
 
-def preview(client, categories, scan_limit):
+def preview(client, categories, scan_limit, report=None):
     """Category and checkpoint decisions for listed models, without downloading."""
+    report = report or Report()
     rows = []
     for category in categories:
+        report.heading(f'{category}: dry run over the top {scan_limit} models (nothing is downloaded)')
         for listed in client.list_models(category, scan_limit):
+            if getattr(report, 'stop_requested', False):
+                return rows
             try:
                 info = client.model_info(listed['id'])
             except HubError as error:
@@ -413,6 +421,8 @@ def preview(client, categories, scan_limit):
                              decision='would_download' if checkpoint else 'rejected',
                              reason=details['category_acceptance'] if checkpoint else reason,
                              sha256=(checkpoint or {}).get('sha256'), size_bytes=(checkpoint or {}).get('size')))
+            report.step('preview', f"{listed['id']} · " + (f"would download {mib(checkpoint['size'])}" if checkpoint
+                        else f'rejected: {reason}'), 'ok' if checkpoint else 'fail')
     return rows
 
 
