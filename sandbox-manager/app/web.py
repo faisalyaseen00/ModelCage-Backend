@@ -27,10 +27,11 @@ _EXECUTION_ID = re.compile(r"[0-9a-f-]{36}")
 class ModelCageWebServer(ThreadingHTTPServer):
     """HTTP server state kept outside the untrusted sandbox boundary."""
 
-    def __init__(self, address: tuple[str, int], cage: ModelCage, upload_dir: Path):
+    def __init__(self, address: tuple[str, int], cage: ModelCage, upload_dir: Path, collect_url: str | None = None):
         super().__init__(address, ModelCageWebHandler)
         self.cage = cage
         self.upload_dir = upload_dir
+        self.collect_url = collect_url
         self.slots = BoundedSemaphore(2)
 
 
@@ -222,6 +223,8 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
               <a href="/exports/{execution_id}.csv">Download syscall CSV</a>
             </section>"""
 
+        nav = (f'<a class="badge nav" href="{escape(self.server.collect_url)}">Collect datasets →</a>'
+               if self.server.collect_url else "")
         html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ModelCage | Secure model analysis</title>
@@ -230,16 +233,16 @@ class ModelCageWebHandler(BaseHTTPRequestHandler):
 *{{box-sizing:border-box}}body{{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0,#17345a 0,transparent 38%),var(--bg);color:var(--text);font:15px/1.6 Inter,ui-sans-serif,system-ui,sans-serif}}
 .shell{{max-width:1000px;margin:0 auto;padding:48px 22px 72px}}.topbar{{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:52px}}
 .brand{{display:flex;align-items:center;gap:12px;font-weight:750;letter-spacing:.02em}}.mark{{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#6ca8ff);color:#07121e;font-weight:900}}
-.badge{{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px;padding:5px 11px}}.hero{{max-width:720px;margin-bottom:34px}}
+a.badge.nav{{display:inline-block;color:var(--accent);text-decoration:none;font-weight:700}}.badge{{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px;padding:5px 11px}}.hero{{max-width:720px;margin-bottom:34px}}
 h1{{font-size:clamp(2.1rem,5vw,3.7rem);line-height:1.05;letter-spacing:-.055em;margin:0 0 18px}}h1 span{{color:var(--accent)}}.hero p{{color:var(--muted);font-size:1.08rem;margin:0}}
 .layout{{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);gap:20px}}.card{{background:rgba(17,29,49,.88);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:26px}}
 .card h2{{font-size:1.15rem;margin:0 0 5px}}.eyebrow{{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}}.subtle{{color:var(--muted);font-size:13px;margin:0 0 22px}}
 label{{display:block;color:#dbe6f8;font-weight:650;margin:18px 0 7px}}input,textarea{{display:block;width:100%;border:1px solid var(--line);border-radius:10px;background:#0b1628;color:var(--text);font:inherit;padding:11px 12px;outline:none}}input:focus,textarea:focus{{border-color:var(--accent);box-shadow:0 0 0 3px rgba(110,231,199,.12)}}textarea{{min-height:108px;resize:vertical}}input[type=file]{{padding:9px;color:var(--muted)}}::placeholder{{color:#647793}}
 button{{border:0;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-strong));color:#06151a;cursor:pointer;font:inherit;font-weight:800;margin-top:22px;padding:12px 18px;transition:transform .15s,filter .15s}}button:hover{{filter:brightness(1.08);transform:translateY(-1px)}}.error{{border:1px solid rgba(255,140,158,.4);border-radius:10px;background:rgba(255,140,158,.1);color:var(--danger);padding:12px 15px}}.result{{margin-top:20px;border:1px solid rgba(110,231,199,.35);border-radius:14px;background:rgba(110,231,199,.07);padding:20px}}.result h2{{margin-top:0}}dl{{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;margin:18px 0}}dt{{color:var(--muted)}}dd{{margin:0;overflow-wrap:anywhere}}code{{color:var(--accent);font:12px ui-monospace,SFMono-Regular,monospace}}a{{color:var(--accent);font-weight:700}}
 .side-list{{list-style:none;padding:0;margin:22px 0 0}}.side-list li{{border-top:1px solid var(--line);padding:13px 0;color:var(--muted)}}.side-list strong{{display:block;color:var(--text);font-size:14px}}.side-list strong::before{{content:"✓";color:var(--accent);margin-right:8px}}
-#live{{margin-top:20px}}#connection{{color:var(--accent);font-size:13px}}#status{{background:#091321;border:1px solid var(--line);border-radius:12px;color:#c9d8ed;overflow:auto;padding:18px;white-space:pre-wrap;word-break:break-word}}#events{{display:grid;gap:8px;list-style:none;margin:18px 0;padding:0}}#events li{{background:var(--panel-soft);border-left:3px solid var(--accent);border-radius:7px;padding:8px 12px;color:#c7d4e8;font-size:13px}}.paths{{color:var(--muted);font-size:13px;margin-top:22px}}@media(max-width:760px){{.shell{{padding-top:25px}}.topbar{{margin-bottom:35px}}.layout{{grid-template-columns:1fr}}.badge{{display:none}}}}
+#live{{margin-top:20px}}#connection{{color:var(--accent);font-size:13px}}#status{{background:#091321;border:1px solid var(--line);border-radius:12px;color:#c9d8ed;overflow:auto;padding:18px;white-space:pre-wrap;word-break:break-word}}#events{{display:grid;gap:8px;list-style:none;margin:18px 0;padding:0}}#events li{{background:var(--panel-soft);border-left:3px solid var(--accent);border-radius:7px;padding:8px 12px;color:#c7d4e8;font-size:13px}}.paths{{color:var(--muted);font-size:13px;margin-top:22px}}@media(max-width:760px){{.shell{{padding-top:25px}}.topbar{{margin-bottom:35px}}.layout{{grid-template-columns:1fr}}.badge:not(.nav){{display:none}}}}
 </style></head><body><main class="shell">
-<header class="topbar"><div class="brand"><span class="mark">M</span> ModelCage</div><span class="badge">LOCAL ANALYSIS CONSOLE</span></header>
+<header class="topbar"><div class="brand"><span class="mark">M</span> ModelCage</div><div style="display:flex;gap:10px;align-items:center">{nav}<span class="badge">LOCAL ANALYSIS CONSOLE</span></div></header>
 <section class="hero"><div class="eyebrow">Policy-driven runtime instrumentation</div><h1>Inspect models in a <span>disposable sandbox.</span></h1><p>Upload a pickle model and ModelCage will quarantine, identify, and execute it behind gVisor isolation while collecting syscall evidence.</p></section>
 <div class="layout"><section class="card"><div class="eyebrow">New analysis</div><h2>Submit a model</h2><p class="subtle">Supported formats: .pkl, .pickle and PyTorch .bin/.pt/.pth · Maximum size: {MAX_UPLOAD_LABEL}</p>
 <form method="post" action="/execute" enctype="multipart/form-data">
@@ -335,12 +338,13 @@ if (analysis && /^[0-9a-f-]{36}$/.test(analysis)) {
 
 
 def create_server(
-    database_path: str = "modelcage.sqlite", upload_dir: str | Path = "uploads", port: int = 8080
+    database_path: str = "modelcage.sqlite", upload_dir: str | Path = "uploads", port: int = 8080,
+    collect_url: str | None = None,
 ) -> ModelCageWebServer:
     """Create a localhost-only manual-testing server."""
     uploads = Path(upload_dir)
     uploads.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return ModelCageWebServer(("127.0.0.1", port), ModelCage(database_path), uploads)
+    return ModelCageWebServer(("127.0.0.1", port), ModelCage(database_path), uploads, collect_url)
 
 
 def main() -> None:

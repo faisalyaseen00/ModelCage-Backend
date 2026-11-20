@@ -104,6 +104,12 @@ sudo .venv/bin/python -m modelcage.hub --workspace hf-data \
   --category text_generation --category text_classification --per-category 20 --scan-limit 500
 ```
 
+While it runs, the collector prints every step to the terminal: each Hugging
+Face HTTP request with its status, the category and checkpoint decision, the
+deduplication check, a live download bar, the SHA-256 check, each sandbox
+lifecycle event (quarantine, runsc check, SecCheck attach, live syscall count,
+cleanup) and the result per model. Stop it with Ctrl+C, not Ctrl+Z.
+
 | Option | Default | Meaning |
 |---|---|---|
 | `--workspace` | required | Folder that holds everything for this collection |
@@ -117,7 +123,21 @@ sudo .venv/bin/python -m modelcage.hub --workspace hf-data \
 Use the same OS user (always `sudo`) for one workspace; mixing users causes
 permission errors on private files.
 
-### 3.4 Resume or extend
+### 3.4 Browser dashboard
+
+```bash
+sudo .venv/bin/python -m modelcage.collect_web --workspace hf-data
+```
+
+Open <http://127.0.0.1:8090>. The page starts and stops runs (including dry
+runs), shows each model's steps (category, checkpoint, dedup, download bar,
+SHA-256, sandbox, live syscall count, result), the full live log, dataset row
+counts and the registry. Its Datasets section downloads the training and
+measurement CSVs, which are root-owned and private (mode 600) on disk; only
+those dataset files are served, never raw traces, quarantine or models. It shows the same real events as the terminal output.
+It listens on localhost only; one run at a time per workspace.
+
+### 3.5 Resume or extend
 
 Run the same command again. The pipeline:
 
@@ -126,7 +146,7 @@ Run the same command again. The pipeline:
 - marks runs left `running` by an interrupted process as `interrupted` (rerun them with `--retry-failed`);
 - holds a lock, so two collectors cannot work on one workspace at once.
 
-### 3.5 Rebuild the datasets offline
+### 3.6 Rebuild the datasets offline
 
 Features can be regenerated from the stored raw events without running any
 model again, for example after changing feature code:
@@ -226,7 +246,7 @@ Docker error.
 
 - gVisor SecCheck streams events over a private per-sandbox socket to the host.
 - It subscribes to every available syscall entry and exit point (884 points
-  on runsc `release-20260907.0`).
+  on runsc `release-20261019.0`).
 - Only the runner process and its children and threads are recorded. Docker,
   runsc, container setup and other sandboxes are excluded.
 - Lost events, invalid packets, unmatched entry/exit pairs and the 250,000

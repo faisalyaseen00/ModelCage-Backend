@@ -8,3 +8,6 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+
+# Hugging Face collection workspace (downloaded models, root-owned)
+sandbox-manager/hf-data/

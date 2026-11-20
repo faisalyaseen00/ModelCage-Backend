@@ -1,3 +1,4 @@
+clear
 """Unit and live integration tests for the ModelCage sandbox policies."""
 
 from unittest.mock import Mock

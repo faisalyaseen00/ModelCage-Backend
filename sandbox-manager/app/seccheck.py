@@ -15,7 +15,7 @@ import time
 from .seccheck_proto import common_pb2 as common, syscall_pb2 as syscall, sentry_pb2 as sentry
 from .syscall_names import NAMES
 
-RELEASE = "release-20260907.0"
+RELEASE = "release-20261019.0"
 SOURCE = "gvisor_seccheck"
 CONTEXT = ["time", "thread_id", "task_start_time", "group_id", "thread_group_start_time",
            "container_id", "process_name", "parent_thread_group_id", "is_exec_session"]
@@ -29,6 +29,11 @@ TYPES = {6: syscall.Syscall, 7: syscall.Open, 8: syscall.Close, 9: syscall.Read,
          32: syscall.InotifyRmWatch, 33: syscall.SocketPair, 34: syscall.Write,
          36: syscall.Mmap, 37: syscall.Listen, 38: syscall.Ptrace}
 LIFECYCLE = {2: sentry.CloneInfo, 3: sentry.ExecveInfo, 5: sentry.TaskExit}
+# The remote sink writes non-blocking and drops a point once its retries run out.
+# 3 retries waited only ~175 µs, so syscall bursts (import torch) lost events.
+# Up to 1000 retries capped at 10 ms lets the workload wait ~10 s for the collector
+# instead; the execution timeout still bounds the run.
+SINK_BACKPRESSURE = {'retries': 1000, 'backoff': '25us', 'backoff_max': '10ms'}
 
 
 class InstrumentationUnavailable(RuntimeError):
@@ -253,7 +258,7 @@ class SecCheckSession:
         self.worker.start()
         config = {'trace_session': {'name': 'Default', 'ignore_missing': False, 'points': points,
             'sinks': [{'name': 'remote', 'ignore_setup_error': False,
-                       'config': {'endpoint': endpoint, 'retries': 3}}]}}
+                       'config': {'endpoint': endpoint, **SINK_BACKPRESSURE}}]}}
         config_path = Path(self.directory.name) / 'session.json'
         config_path.write_text(json.dumps(config))
         self._run(['--root', self.root, 'trace', 'create', '--config', str(config_path), self.container])
